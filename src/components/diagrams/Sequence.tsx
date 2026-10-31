@@ -72,7 +72,11 @@ export default function Sequence({ actors, messages, shown, states, phases, labe
   };
   const top = HEAD_H + (states ? STATE_H + 8 : 8);
   const rowsTop = top + 14;
-  const height = rowsTop + messages.length * ROW_H + 6;
+  // Each phase gets its own label strip above its first row, so labels never collide.
+  const PH = phases?.length ? 18 : 0;
+  const rowTop = (i: number) =>
+    rowsTop + i * ROW_H + PH * (phases?.filter((p) => p.start <= i).length ?? 0);
+  const height = rowTop(Math.max(0, messages.length - 1)) + (messages.length ? ROW_H : 0) + 6;
   const boxW = Math.min(col - 10, 132);
 
   return (
@@ -87,8 +91,8 @@ export default function Sequence({ actors, messages, shown, states, phases, labe
     >
       {phases?.map((p) => {
         if (p.start >= shown) return null;
-        const y1 = rowsTop + p.start * ROW_H - 4;
-        const y2 = rowsTop + (Math.min(p.end, shown - 1) + 1) * ROW_H - 4;
+        const y1 = rowTop(p.start) - PH - 2;
+        const y2 = rowTop(Math.min(p.end, shown - 1)) + ROW_H - 2;
         return (
           <g key={p.label} className="seq-phase">
             <rect x={2} y={y1} width={width - 4} height={y2 - y1} rx={6} />
@@ -144,7 +148,7 @@ export default function Sequence({ actors, messages, shown, states, phases, labe
         const dir = x2 > x1 ? 1 : -1;
         const sx = x1 + dir * 4;
         const ex = x2 - dir * 4;
-        const y = rowsTop + i * ROW_H + 26;
+        const y = rowTop(i) + 26;
         const current = i === shown - 1;
         const tone = m.tone ?? 'default';
         const mid = (x1 + x2) / 2;
