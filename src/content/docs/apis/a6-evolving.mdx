@@ -1,0 +1,122 @@
+---
+title: "A6 — Evolving an API"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import BreakingChanges from '../../../components/diagrams/BreakingChanges.tsx';
+
+An API ships once and changes for years. Its clients are other teams' code, mobile apps that users never update, and scripts someone wrote in 2021. You can't change them, so you change the API in ways they survive, and when you truly can't, you run two versions side by side and give everyone time to move. This module covers how to tell the two cases apart and what to do in each.
+
+**Concepts**
+
+- **<a id="concept-a6-1" class="concept-num" href="#concept-a6-1">A6.1</a> What counts as breaking.** A change is breaking if a client that worked yesterday can fail today without changing anything. Breaking: removing or renaming a field, endpoint or parameter; changing a type or format; making optional input required; tightening validation or limits; changing status codes or error types; changing the meaning of a value. Usually safe: adding endpoints, adding optional request fields or parameters, adding response fields.
+- **<a id="concept-a6-2" class="concept-num" href="#concept-a6-2">A6.2</a> The tolerant reader.** Additive changes are only safe if clients ignore what they don't recognise. Build clients that ignore unknown fields, don't depend on field order, and handle unknown enum values with a sensible default. Both lab frameworks ignore unknown JSON fields by default, which is what makes “add a field” a non-event. Strict deserialisers that fail on unknown fields turn every additive change into a breaking one.
+- **<a id="concept-a6-3" class="concept-num" href="#concept-a6-3">A6.3</a> Hyrum's law.** Hyrum Wright's observation: with enough users, every observable behaviour of your API will be depended on by somebody, whatever the contract says. Field order, error message text, timing, the order of a list you never promised to sort. Contracts limit what you *owe* clients, not what they rely on. When a “safe” change breaks someone, this is usually why.
+- **<a id="concept-a6-4" class="concept-num" href="#concept-a6-4">A6.4</a> Evolve first, version last.** Most changes can be made compatible. Add the new field next to the old one instead of renaming. Accept both old and new input formats. Add a new endpoint rather than changing an old one. A new major version is for changes that can't be made compatible, and every live version is code you maintain, test and secure.
+- **<a id="concept-a6-5" class="concept-num" href="#concept-a6-5">A6.5</a> Where the version goes.** **In the path** (`/v2/orders`): visible, easy to route at a gateway and easy to test with curl; the most common choice. **In a header or media type** (`Accept: application/vnd.example.v2+json`): URLs stay stable and versions can apply per resource, but it's invisible in logs and harder to try out. **Dated versions** (Stripe's `Stripe-Version: 2024-06-20`): each account is pinned to the API as it was on a date, and the server translates between versions. Very smooth for clients, a lot of machinery on the server. Pick one, document it, and never mix them.
+- **<a id="concept-a6-6" class="concept-num" href="#concept-a6-6">A6.6</a> Separate storage from representation.** In the lab, both versions read and write the same stored orders; each has its own *representation*. v1 shows `customer` as an email string, v2 as an object. Keeping the storage model apart from the contract lets you run versions side by side without copying data, and lets storage change without touching any contract.
+- **<a id="concept-a6-7" class="concept-num" href="#concept-a6-7">A6.7</a> Deprecate in band.** Tell clients in every response, in standard headers they can monitor: `Deprecation` (RFC 9745) says since when, `Sunset` (RFC 8594) says when it stops working, and `Link` with `rel="deprecation"` and `rel="successor-version"` says where to read more and what replaces it. Documentation and emails reach people; headers reach code. A client library can log a warning the first time it sees `Deprecation`.
+- **<a id="concept-a6-8" class="concept-num" href="#concept-a6-8">A6.8</a> Sunset with data.** Log which clients still call the old version (by API key or user agent), contact them, and watch the traffic fall before the date. Common tactics near the end are *brownouts*: short scheduled periods where v1 returns errors, so forgotten integrations surface while there's still time. After the sunset, answer 410 Gone with a problem body pointing at the migration guide, rather than a confusing 404.
+- **<a id="concept-a6-9" class="concept-num" href="#concept-a6-9">A6.9</a> Catch breaks before release.** Compare each change to the OpenAPI document (A2) against the last released one in CI. Tools like oasdiff list breaking changes automatically. Consumer-driven contract tests (such as Pact) go further: each consumer records the requests and fields it actually relies on, and the provider's build fails if a change would break any of them.
+
+## Breaking or safe?
+
+<BreakingChanges client:visible />
+
+## Lab A6 — two versions, one set of orders
+
+v1 has `customer` as an email string. v2 makes it an object, `{"email", "name"}`: a type change, so a new version. Both gained an optional `note` after launch, an additive change that needed no new version. Storage is in memory: this module is about the contract.
+
+**Spec**
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `POST /v1/orders` with `"customer": "ada@example.com"` | `201`; the body has `"customer": "ada@example.com"` |
+| 2 | `POST /v2/orders` with `"customer": {"email": …, "name": "Ada"}` | `201`; the body has the customer object |
+| 3 | Create with v2, read with v1 and with v2 | The same order: v1 shows the email string, v2 the object |
+| 4 | Any v1 response (even a 404) | `Deprecation: @1793491200`, `Sunset: Fri, 30 Apr 2027 00:00:00 GMT`, and `Link` headers with `rel="deprecation"` and `rel="successor-version"` |
+| 5 | Any v2 response | No `Deprecation` header |
+| 6 | v1 POST without `note`; with an unknown `giftWrap` field; with `note` | `201`, `201` (unknown fields ignored), `201` with the note echoed |
+| 7 | v2 POST with a customer that has no email | `422` with pointer `#/customer/email` |
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+Two controllers, one store. Each maps the stored order to its own representation:
+
+```java
+@RestController
+@RequestMapping("/v2/orders")
+public class V2OrderController {
+  public record Customer(String email, String name) {}
+  public record OrderV2(String id, Customer customer, String currency, List<StoredOrder.Item> items,
+                        String note, long total, String status, Instant createdAt) {}
+
+  static OrderV2 view(StoredOrder o) {
+    return new OrderV2(o.id(), new Customer(o.customerEmail(), o.customerName()), o.currency(), o.items(),
+        o.note(), o.total(), o.status(), o.createdAt());
+  }
+}
+```
+
+A servlet filter adds the deprecation headers to every v1 response, including errors:
+
+```java
+@Component
+public class DeprecationHeaders extends OncePerRequestFilter {
+  @Override
+  protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+      throws ServletException, IOException {
+    if (req.getRequestURI().startsWith("/v1/")) {
+      res.setHeader("Deprecation", "@1793491200");                      // RFC 9745: "@" + Unix seconds
+      res.setHeader("Sunset", "Fri, 30 Apr 2027 00:00:00 GMT");         // RFC 8594: an HTTP date
+      res.addHeader("Link", "<https://api.example.com/docs/migrating-to-v2>; rel=\"deprecation\"");
+      res.addHeader("Link", "</v2/orders>; rel=\"successor-version\"");
+    }
+    chain.doFilter(req, res);
+  }
+}
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+Two routers, one store, and a middleware for the headers:
+
+```python
+v1 = APIRouter(prefix="/v1/orders")
+v2 = APIRouter(prefix="/v2/orders")
+
+
+def v2_view(o: Stored) -> OrderV2:
+    return OrderV2(id=o.id, customer=Customer(email=o.customer_email, name=o.customer_name), currency=o.currency,
+                   items=o.items, note=o.note, total=o.total, status=o.status, created_at=o.created_at)
+
+
+@app.middleware("http")
+async def deprecation_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/v1/"):
+        response.headers["Deprecation"] = "@1793491200"
+        response.headers["Sunset"] = "Fri, 30 Apr 2027 00:00:00 GMT"
+        response.headers.append("Link", '<https://api.example.com/docs/migrating-to-v2>; rel="deprecation"')
+        response.headers.append("Link", '</v2/orders>; rel="successor-version"')
+    return response
+```
+
+`headers.append` (not assignment) keeps both `Link` headers.
+
+</TabItem>
+</Tabs>
+
+**Try it**
+
+```bash
+curl -si localhost:8080/v1/orders/ord_1 | grep -iE '^(deprecation|sunset|link)'
+```
+
+## You've got it when
+
+Given a proposed change, you can say whether it breaks clients and how to make it compatible if it does; you can argue for path, header or dated versioning for a given audience; and you can plan a deprecation from first header to final 410, including how you'd know who is still on the old version.

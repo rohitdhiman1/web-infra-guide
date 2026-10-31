@@ -1,0 +1,141 @@
+---
+title: "A7 — Long-running work and webhooks"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import AsyncFlow from '../../../components/diagrams/AsyncFlow.tsx';
+
+Some work doesn't fit in one request: a refund that waits for the bank, a report over a million rows, a video transcode. Holding the HTTP request open ties up a connection and runs into every timeout between client and server ([Part 8](/part-8-reverse-proxy/)). Instead, accept the work, let the client check on it, and ideally tell the client when it's done.
+
+**Concepts**
+
+- **<a id="concept-a7-1" class="concept-num" href="#concept-a7-1">A7.1</a> When to go asynchronous.** If the work can take longer than a few seconds, or depends on a slow third party, don't make the client wait on an open request. Proxies and load balancers time out (often at 30 or 60 seconds), clients time out, and every waiting request holds a thread or a connection. Synchronous is simpler; switch when the waiting starts to hurt.
+- **<a id="concept-a7-2" class="concept-num" href="#concept-a7-2">A7.2</a> 202 Accepted and a status resource.** Answer **202 Accepted**: the request is valid and has been queued, but not done. Return a `Location` pointing at a *status resource* (`/refunds/ref_1`), not at the finished result, plus `Retry-After` as a polling hint. The status resource says `pending`, then `succeeded` or `failed` with problem details, and links to the result when there is one.
+- **<a id="concept-a7-3" class="concept-num" href="#concept-a7-3">A7.3</a> Polling.** The client GETs the status resource until it's done. It's simple, works through any firewall or NAT because the client always initiates, and is easy to debug. The costs: most polls return “not yet”, and the client learns about completion up to one interval late. Respect `Retry-After`, and back off for long jobs.
+- **<a id="concept-a7-4" class="concept-num" href="#concept-a7-4">A7.4</a> Webhooks.** The client registers a URL, and when something happens the server **POSTs an event to it**: the client's server becomes an HTTP server for yours. Events arrive promptly without wasted requests. In exchange the receiver must be publicly reachable, and both sides take on a set of problems: authenticity, retries, duplicates and ordering. Most webhook providers also keep polling or an events list as a fallback.
+- **<a id="concept-a7-5" class="concept-num" href="#concept-a7-5">A7.5</a> Sign every webhook.** Anyone can POST to a public URL, so receivers must check that an event really came from you. The common scheme is an HMAC-SHA256 over the message id, a timestamp and the raw body, keyed with a secret shared at subscription time. The lab follows the *Standard Webhooks* specification: `webhook-id`, `webhook-timestamp` and `webhook-signature: v1,<base64>`. Receivers verify against the **raw bytes** (re-serialised JSON won't match), compare in constant time, and reject timestamps older than a few minutes to block replays.
+- **<a id="concept-a7-6" class="concept-num" href="#concept-a7-6">A7.6</a> At-least-once delivery.** A sender can't know whether a timed-out delivery was processed, so it retries, and the receiver may see the same event twice. Retry with exponential backoff over hours, not seconds (receivers have outages too). Then give up into a dead-letter list you can replay from. Use the same event id on every attempt.
+- **<a id="concept-a7-7" class="concept-num" href="#concept-a7-7">A7.7</a> Receivers: verify, dedupe, acknowledge, then work.** A good receiver checks the signature, records the event id (and skips ids it has seen), returns 2xx **quickly**, and does the real work from its own queue. Slow handlers cause timeouts, which cause retries, which cause duplicates. It's the same idempotency lesson as A3, seen from the other side.
+- **<a id="concept-a7-8" class="concept-num" href="#concept-a7-8">A7.8</a> Ordering isn't guaranteed.** Retries and parallel delivery mean `refund.succeeded` can arrive before `refund.created`. Make events carry enough state (or a version or timestamp) to be applied in any order, or have the receiver fetch the current state from the API when an event arrives (“thin” events). Fetching is often the most robust option.
+- **<a id="concept-a7-9" class="concept-num" href="#concept-a7-9">A7.9</a> Webhooks as an attack surface.** A webhook URL is a URL a customer chose and your servers will call. Without checks, someone registers `http://169.254.169.254/` or an internal hostname and turns your delivery system into a probe of your own network: *server-side request forgery* (SSRF). Require https, resolve the hostname and refuse private, loopback and link-local addresses, and send deliveries from a separate egress path. The lab only checks the scheme (allowing plain http for localhost so tests can run). The rest is noted, not built.
+- **<a id="concept-a7-10" class="concept-num" href="#concept-a7-10">A7.10</a> Streaming alternatives.** When a client wants a live stream of updates rather than one completion notice, the options are Server-Sent Events (one long HTTP response the server keeps writing to), WebSockets (two-way, after an HTTP upgrade), or a message broker such as Kafka. Module A8 compares them.
+
+## Polling or webhook?
+
+<AsyncFlow client:visible />
+
+## Lab A7 — refunds that finish later
+
+`POST /refunds` answers 202 at once. The refund completes in the background after a configurable delay. Webhook subscribers then get a signed `refund.succeeded` event, retried with exponential backoff until they answer 2xx. Storage is in memory.
+
+**Spec** (tests use a 200 ms refund delay and a 50 ms retry base)
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `POST /refunds {"orderId": "ord_1", "amount": 3000}` | `202`, `Location: /refunds/ref_N`, `Retry-After: 1`, `"status": "pending"` |
+| 2 | `GET` the Location immediately, then until done | `pending` with `Retry-After`, then `succeeded` with `completedAt` |
+| 3 | `GET /refunds/ref_999999` | `404` problem |
+| 4 | `POST /webhooks {"url": …}` | `201` with an `id` and a `secret` starting `whsec_` |
+| 5 | A refund completes; the receiver answers 500, 500, then 204 | Exactly 3 deliveries, all with the **same** `webhook-id`, and a signature that verifies with the secret |
+| 6 | Verifying a tampered body, a 10-minute-old timestamp, or the wrong secret | `false` each time |
+| 7 | `POST /webhooks {"url": "http://example.com/hooks"}` | `422`: https only (plain http only for localhost) |
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+@PostMapping("/refunds")
+public ResponseEntity<Refund> start(@RequestBody NewRefund in) {
+  var r = refunds.start(in.orderId(), in.amount());      // schedules completion in the background
+  return ResponseEntity.accepted()                       // 202: accepted, not done
+      .location(URI.create("/refunds/" + r.id()))        // the status resource
+      .header("Retry-After", "1").body(r);
+}
+```
+
+Signing follows Standard Webhooks:
+
+```java
+public static String sign(String secret, String id, long timestamp, String body) {
+  byte[] key = Base64.getDecoder().decode(secret.substring("whsec_".length()));
+  Mac mac = Mac.getInstance("HmacSHA256");
+  mac.init(new SecretKeySpec(key, "HmacSHA256"));
+  byte[] sig = mac.doFinal((id + "." + timestamp + "." + body).getBytes(StandardCharsets.UTF_8));
+  return "v1," + Base64.getEncoder().encodeToString(sig);
+}
+
+public static boolean verify(String secret, String id, String timestamp, String header, String body, long now) {
+  long ts = Long.parseLong(timestamp);
+  if (Math.abs(now - ts) > 300) return false;                         // replay protection
+  byte[] expected = sign(secret, id, ts, body).getBytes(StandardCharsets.UTF_8);
+  for (String candidate : header.split(" ")) {                        // several during secret rotation
+    if (MessageDigest.isEqual(expected, candidate.getBytes(StandardCharsets.UTF_8))) return true;   // constant time
+  }
+  return false;
+}
+```
+
+Delivery retries with the same id until it gets a 2xx:
+
+```java
+http.sendAsync(req, BodyHandlers.discarding()).whenComplete((res, err) -> {
+  boolean ok = err == null && res.statusCode() / 100 == 2;
+  if (!ok && attempt < maxAttempts) {
+    long wait = retryBaseMs << (attempt - 1);            // 1x, 2x, 4x, 8x the base
+    scheduler.schedule(() -> deliver(s, messageId, body, attempt + 1), wait, TimeUnit.MILLISECONDS);
+  }
+});
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+@app.post("/refunds", status_code=202, dependencies=[Depends(json_body)])
+def start_refund(body: NewRefund, response: Response):
+    refund = {"id": f"ref_{next(IDS)}", "status": "pending", ...}
+    REFUNDS[refund["id"]] = refund
+    threading.Timer(CONFIG["refund_delay_ms"] / 1000, complete, args=[refund["id"]]).start()
+    response.headers["Location"] = f"/refunds/{refund['id']}"
+    response.headers["Retry-After"] = "1"
+    return refund
+```
+
+```python
+def sign(secret: str, msg_id: str, timestamp: int, body: str) -> str:
+    key = base64.b64decode(secret.removeprefix("whsec_"))
+    mac = hmac.new(key, f"{msg_id}.{timestamp}.{body}".encode(), hashlib.sha256).digest()
+    return "v1," + base64.b64encode(mac).decode()
+
+
+def verify(secret: str, msg_id: str, timestamp: str, signature_header: str, body: str, now: int) -> bool:
+    if not timestamp.isdigit() or abs(now - int(timestamp)) > 300:
+        return False                                                  # replay protection
+    expected = sign(secret, msg_id, int(timestamp), body)
+    return any(hmac.compare_digest(expected, c) for c in signature_header.split(" "))   # constant time
+```
+
+```python
+def deliver(sub: dict, msg_id: str, body: str) -> None:
+    with httpx2.Client(timeout=5) as client:
+        for attempt in range(1, CONFIG["max_attempts"] + 1):
+            ts = int(time.time())
+            headers = {"webhook-id": msg_id, "webhook-timestamp": str(ts),
+                       "webhook-signature": webhooks.sign(sub["secret"], msg_id, ts, body), ...}
+            try:
+                if client.post(sub["url"], content=body, headers=headers).is_success:
+                    return
+            except httpx2.TransportError:
+                pass
+            if attempt < CONFIG["max_attempts"]:
+                time.sleep(CONFIG["retry_base_ms"] * 2 ** (attempt - 1) / 1000)
+```
+
+</TabItem>
+</Tabs>
+
+## You've got it when
+
+You can choose between waiting, polling and webhooks for a given job and defend the choice; describe a 202 flow end to end; and design both sides of a webhook. That covers how events are signed and verified, why delivery is at-least-once, how receivers dedupe and why they must answer quickly, what to do about ordering, and how a webhook URL can be abused for SSRF.

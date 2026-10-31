@@ -71,6 +71,8 @@ export default defineConfig({
             page('A3 — Reliability', 'apis/a3-reliability'),
             page('A4 — Concurrency and caching', 'apis/a4-concurrency-caching'),
             page('A5 — Collections', 'apis/a5-collections'),
+            page('A6 — Evolving an API', 'apis/a6-evolving'),
+            page('A7 — Long-running work and webhooks', 'apis/a7-async-webhooks'),
           ],
         },
         {

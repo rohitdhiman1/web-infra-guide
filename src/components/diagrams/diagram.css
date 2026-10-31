@@ -2590,3 +2590,25 @@
 @media (max-width: 30rem) {
   .pd { grid-template-columns: 1fr; }
 }
+
+/* ---------- breaking changes quiz (API track A6) ---------- */
+.bc {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.bc-item {
+  margin: 0 !important;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--dg-border);
+  border-radius: 0.5rem;
+  background: var(--dg-panel);
+  display: grid;
+  gap: 0.45rem;
+}
+.bc-item.is-right { border-color: var(--dg-ok); }
+.bc-item.is-wrong { border-color: var(--dg-warn); }
+.bc-change { font-weight: 600; }
+.bc-why { color: var(--dg-text); }
