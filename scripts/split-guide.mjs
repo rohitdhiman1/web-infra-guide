@@ -77,7 +77,9 @@ const lines = raw.split('\n');
 // The document preamble (title + byline) sits above "## Contents".
 const contentsStart = lines.findIndex((l) => l === '## Contents');
 const preamble = lines.slice(0, contentsStart);
-const byline = preamble.find((l) => l.trim() && !l.startsWith('#'))?.trim();
+const byline = preamble.find((l) => l.trim() && !l.startsWith('#'))?.trim()
+  // Keep the date only; the author handle is not published.
+  ?.replace(/\s*·\s*@.*$/, "");
 
 // Split into ## sections.
 const sections = [];
