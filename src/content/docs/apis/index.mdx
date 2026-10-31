@@ -1,0 +1,53 @@
+---
+title: "APIs on HTTP — how this track works"
+sidebar:
+  label: "Overview"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+The main guide teaches HTTP as a protocol: how messages are framed, carried and proxied. This track teaches how to build **APIs** on top of it: which method to use, which status code to send, how to make retries safe, how to change an API without breaking its clients. It starts from zero and aims for the level where you can defend every design choice under follow-up questions.
+
+:::note[Who wrote this]
+This track was written for this site. It isn't part of the original guide. Its sources are the HTTP RFCs (RFC 9110 for semantics, RFC 9111 for caching, RFC 9457 for error formats, RFC 5789 and RFC 7396 for PATCH) and widely used practice. Where something is a judgement call rather than a rule, the page says so.
+:::
+
+## Before you start
+
+Read these parts of the main guide first. The track builds on them instead of repeating them:
+
+- [Part 1](/part-1-networking/): what a connection is.
+- [Part 3](/part-3-http11/): the shape of HTTP messages, especially [message structure (3.1)](/part-3-http11/#concept-3-1), [methods (3.2)](/part-3-http11/#concept-3-2) and [status codes (3.3)](/part-3-http11/#concept-3-3).
+- [Part 5](/part-5-tls/): enough TLS to know what HTTPS adds.
+
+## The running example: orders and payments
+
+One API grows through the whole track. It starts as a list of orders in memory and ends as an orders and payments service with idempotent payments, safe concurrent edits, pagination, versioning, webhooks and rate limits. A shop is a good teaching domain because the mistakes are easy to see: a duplicated payment or a lost update is obviously wrong.
+
+## How each module is built
+
+Every module has the same parts:
+
+1. **Concepts**, numbered A0.1, A0.2 and so on, with linkable anchors like the main guide.
+2. **A diagram or simulation** where one helps you see the idea.
+3. **A lab spec**: the exact requests and the responses they must produce. It's written so you, or another tool, can build and test against it.
+4. **Snippets** in Java (Spring Boot 4 on Java 25) and Python (FastAPI on Python 3.14). The snippets were compiled and tested against the spec. They show the parts that matter, not whole projects.
+5. **“You've got it when”**: what you should be able to do before moving on.
+
+## The modules
+
+| Module | Topic |
+|---|---|
+| [A0](/apis/a0-foundations/) | Foundations: resources, representations, what REST really is |
+| [A1](/apis/a1-http-semantics/) | HTTP semantics for APIs: methods and status codes |
+| A2 | Errors and contracts: problem details, validation, OpenAPI |
+| A3 | Reliability: timeouts, retries, idempotency keys |
+| A4 | Concurrency and caching: ETags, conditional requests |
+| A5 | Collections: pagination, filtering, bulk operations |
+| A6 | Evolving an API: versioning and compatibility |
+| A7 | Long-running work: 202, polling, webhooks |
+| A8 | API styles: REST, gRPC, GraphQL, streaming |
+| A9 | The gateway and the edge: rate limiting, request IDs, CORS, TLS |
+| A10 | Capstone: design, build and break one API end to end |
+
+There's no schedule. Move on when you pass the checks at the end of a module, not when a week is up.

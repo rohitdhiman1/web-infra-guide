@@ -62,6 +62,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'APIs on HTTP',
+          items: [
+            page('Overview', 'apis'),
+            page('A0 — Foundations', 'apis/a0-foundations'),
+            page('A1 — HTTP semantics', 'apis/a1-http-semantics'),
+          ],
+        },
+        {
           label: 'Reference',
           items: [
             page('Learning path and milestones', 'learning-path'),
