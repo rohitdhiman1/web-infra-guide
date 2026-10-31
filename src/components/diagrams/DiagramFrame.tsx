@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { KeyboardEventHandler, ReactNode } from 'react';
 import './diagram.css';
 
 interface Props {
@@ -12,12 +12,14 @@ interface Props {
   /** Buttons / toggles shown under the diagram. */
   controls?: ReactNode;
   className?: string;
+  /** e.g. arrow-key stepping; fires for key presses anywhere inside the diagram. */
+  onKeyDown?: KeyboardEventHandler;
 }
 
 /** Shared chrome for every interactive diagram: header, figure, live status, controls. */
-export default function DiagramFrame({ title, subtitle, children, status, controls, className }: Props) {
+export default function DiagramFrame({ title, subtitle, children, status, controls, className, onKeyDown }: Props) {
   return (
-    <figure className={`dg not-content ${className ?? ''}`} aria-label={title}>
+    <figure className={`dg not-content ${className ?? ''}`} aria-label={title} onKeyDown={onKeyDown}>
       <figcaption className="dg-head">
         <span className="dg-title">{title}</span>
         {subtitle && <span className="dg-sub">{subtitle}</span>}

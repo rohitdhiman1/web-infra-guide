@@ -7,6 +7,7 @@ import react from '@astrojs/react';
 const page = (label, slug) => ({ label, slug });
 
 export default defineConfig({
+  devToolbar: { enabled: false },
   integrations: [
     starlight({
       title: 'Web Servers, HTTPS & nginx',
