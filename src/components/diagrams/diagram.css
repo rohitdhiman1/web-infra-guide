@@ -1,0 +1,209 @@
+/* Shared diagram styles. Colours come from Starlight's theme variables, so
+   everything follows light/dark mode automatically. */
+.dg {
+  --dg-bg: var(--sl-color-bg-nav);
+  --dg-panel: var(--sl-color-bg);
+  --dg-border: var(--sl-color-hairline);
+  --dg-text: var(--sl-color-white);
+  --dg-muted: var(--sl-color-gray-3);
+  --dg-accent: var(--sl-color-accent);
+  --dg-accent-soft: var(--sl-color-accent-low);
+  --dg-accent-text: var(--sl-color-text-accent);
+  --dg-ok: #1f9d55;
+  --dg-warn: #c27803;
+  --dg-bad: #d43c3c;
+  --dg-info: #2b7bd1;
+  --dg-violet: #8a4fd8;
+  --dg-ok-soft: color-mix(in srgb, var(--dg-ok) 16%, transparent);
+  --dg-warn-soft: color-mix(in srgb, var(--dg-warn) 18%, transparent);
+  --dg-bad-soft: color-mix(in srgb, var(--dg-bad) 16%, transparent);
+  --dg-info-soft: color-mix(in srgb, var(--dg-info) 16%, transparent);
+  --dg-violet-soft: color-mix(in srgb, var(--dg-violet) 16%, transparent);
+
+  margin: 1.75rem 0;
+  border: 1px solid var(--dg-border);
+  border-radius: 0.75rem;
+  background: var(--dg-bg);
+  color: var(--dg-text);
+  font-size: var(--sl-text-sm);
+  line-height: 1.5;
+  overflow: hidden;
+}
+:root[data-theme='dark'] .dg {
+  --dg-ok: #3ccf7e;
+  --dg-warn: #f0b440;
+  --dg-bad: #ff6b6b;
+  --dg-info: #5eaaff;
+  --dg-violet: #b48cff;
+}
+.dg *,
+.dg *::before,
+.dg *::after {
+  box-sizing: border-box;
+}
+.dg-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--dg-border);
+}
+.dg-title {
+  font-weight: 600;
+  font-size: var(--sl-text-base);
+}
+.dg-sub {
+  color: var(--dg-muted);
+}
+.dg-body {
+  padding: 1rem;
+}
+.dg-status {
+  margin: 0 1rem;
+  padding: 0.75rem 1rem;
+  min-height: 3.25rem;
+  border-radius: 0.5rem;
+  background: var(--dg-panel);
+  border: 1px solid var(--dg-border);
+}
+.dg-status strong {
+  color: var(--dg-text);
+}
+.dg-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+/* ---------- buttons ---------- */
+.dg-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  min-width: 2.5rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--dg-border);
+  border-radius: 0.5rem;
+  background: var(--dg-panel);
+  color: var(--dg-text);
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.dg-btn:hover:not(:disabled) {
+  border-color: var(--dg-accent);
+  background: var(--dg-accent-soft);
+}
+.dg-btn:focus-visible,
+.dg-focusable:focus-visible {
+  outline: 2px solid var(--dg-accent);
+  outline-offset: 2px;
+}
+.dg-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.dg-btn[aria-pressed='true'],
+.dg-btn.is-primary {
+  background: var(--dg-accent);
+  border-color: var(--dg-accent);
+  color: var(--sl-color-black);
+}
+:root[data-theme='light'] .dg-btn[aria-pressed='true'],
+:root[data-theme='light'] .dg-btn.is-primary {
+  color: #fff;
+}
+.dg-btn code {
+  font-size: 0.95em;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+.dg-btn-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.dg-label {
+  display: block;
+  width: 100%;
+  color: var(--dg-muted);
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dg-spacer {
+  flex: 1 1 auto;
+}
+
+/* ---------- generic pieces ---------- */
+.dg code {
+  font-family: var(--__sl-font-mono);
+  font-size: 0.9em;
+  padding: 0.05em 0.3em;
+  border-radius: 0.25rem;
+  background: var(--sl-color-gray-6);
+  color: var(--dg-text);
+}
+.dg-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.dg-svg text {
+  fill: var(--dg-text);
+  font-family: var(--__sl-font);
+}
+.dg-progress {
+  color: var(--dg-muted);
+  font-variant-numeric: tabular-nums;
+  align-self: center;
+}
+.dg-pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.dg-pill.ok { color: var(--dg-ok); background: var(--dg-ok-soft); }
+.dg-pill.bad { color: var(--dg-bad); background: var(--dg-bad-soft); }
+.dg-pill.warn { color: var(--dg-warn); background: var(--dg-warn-soft); }
+.dg-pill.info { color: var(--dg-info); background: var(--dg-info-soft); }
+.dg-pill.muted { color: var(--dg-muted); }
+
+.dg-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.dg-card {
+  border: 1px solid var(--dg-border);
+  border-radius: 0.5rem;
+  background: var(--dg-panel);
+  padding: 0.75rem;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg *,
+  .dg *::before,
+  .dg *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

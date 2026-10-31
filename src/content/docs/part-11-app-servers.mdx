@@ -1,0 +1,75 @@
+---
+title: "Part 11 — Application servers: WSGI, ASGI, Gunicorn, Uvicorn"
+---
+import GunicornBuffering from '../../components/diagrams/GunicornBuffering';
+import TomcatConnector from '../../components/diagrams/TomcatConnector';
+
+This answers your original question about frameworks. Django and Flask are not web servers. Their `runserver` and `flask run` commands are development servers, never for production. A real deployment is nginx → an application server → your framework code. Plan one week.
+
+<GunicornBuffering client:visible />
+
+Toggle nginx on and off. Same app, same workers: the only change is who spends time feeding slow clients ([11.6](#concept-11-6)).
+
+**Concepts**
+
+- **<a id="concept-11-1" class="concept-num" href="#concept-11-1">11.1</a> Why the layers exist.** nginx handles slow clients, TLS, static files and buffering. The app server manages Python processes. The framework only turns a request into a response.
+- **<a id="concept-11-2" class="concept-num" href="#concept-11-2">11.2</a> WSGI.** Python's synchronous interface (PEP 3333): the server calls `app(environ, start_response)` once per request. Flask and classic Django use it.
+- **<a id="concept-11-3" class="concept-num" href="#concept-11-3">11.3</a> ASGI.** The async successor. `async def app(scope, receive, send)` supports WebSockets, long-lived connections and many concurrent requests per process. FastAPI, Starlette and modern Django use it.
+- **<a id="concept-11-4" class="concept-num" href="#concept-11-4">11.4</a> Gunicorn.** A pre-fork WSGI server (the model from [4.7](/part-4-raw-servers/#concept-4-7)). Tune `--workers` (a common start is 2 × cores + 1), `--timeout` and `--graceful-timeout`. Also try the `gthread` worker type.
+- **<a id="concept-11-5" class="concept-num" href="#concept-11-5">11.5</a> Uvicorn.** An ASGI server on an event loop (the model from [4.8](/part-4-raw-servers/#concept-4-8)). In production run several worker processes, either via its `--workers` flag or under Gunicorn with the Uvicorn worker class.
+- **<a id="concept-11-6" class="concept-num" href="#concept-11-6">11.6</a> Why nginx in front.** Sync workers are expensive: a slow client holding one ties up a whole process. nginx's buffering ([8.5](/part-8-reverse-proxy/#concept-8-5)) absorbs slow clients so workers finish in milliseconds.
+- **<a id="concept-11-7" class="concept-num" href="#concept-11-7">11.7</a> Unix sockets vs TCP.** Bind the app server to `unix:/run/gunicorn.sock` on the same host, or to `127.0.0.1:8000`. Never expose it publicly.
+- **<a id="concept-11-8" class="concept-num" href="#concept-11-8">11.8</a> Static and media files.** Let nginx serve `/static/` directly with `alias`. Django's `collectstatic` gathers them into one folder for this.
+- **<a id="concept-11-9" class="concept-num" href="#concept-11-9">11.9</a> Trusting proxy headers.** The app must know it is behind HTTPS. Django uses `SECURE_PROXY_SSL_HEADER`; Flask uses Werkzeug's `ProxyFix`; Uvicorn has `--forwarded-allow-ips`. Misconfiguring this breaks redirects or opens spoofing holes.
+- **<a id="concept-11-10" class="concept-num" href="#concept-11-10">11.10</a> Other ecosystems.** The same pattern everywhere: Node (Express or Fastify, often behind nginx), PHP (PHP-FPM via `fastcgi_pass`), Java (Tomcat or Netty), Go (its `net/http` is production-ready by itself, but nginx still adds value in front).
+
+## The Java side: Tomcat, Jetty, Netty and virtual threads
+
+The Java world has the same layers with different names. Once you map them, everything in this part applies.
+
+| Python | Java equivalent | Used by |
+| --- | --- | --- |
+| WSGI (sync interface) | Servlet API (Jakarta EE) | Spring MVC, most classic Java web apps |
+| ASGI (async interface) | Reactive handlers on Netty | Spring WebFlux, Vert.x, Quarkus reactive |
+| Gunicorn (worker pool) | Tomcat or Jetty (thread pool) | Spring Boot embeds Tomcat by default |
+| Uvicorn (event loop) | Netty (event loop) | WebFlux, gRPC Java, many API gateways |
+| Django, Flask | Spring Boot, Quarkus, Micronaut | Your application code |
+
+**The servers to know**
+
+- **<a id="concept-11-11" class="concept-num" href="#concept-11-11">11.11</a> Tomcat.** The default in Spring Boot. Its NIO connector is a hybrid: a poller watches every open connection with epoll (up to `max-connections`, default 8192), then hands ready requests to a worker pool (`server.tomcat.threads.max`, default 200). `accept-count` (default 100) is the listen backlog from [1.8](/part-1-networking/#concept-1-8).
+- **<a id="concept-11-12" class="concept-num" href="#concept-11-12">11.12</a> Jetty.** The same hybrid idea, very embeddable. Spring Boot's alternative starter.
+- **<a id="concept-11-13" class="concept-num" href="#concept-11-13">11.13</a> Netty.** A pure event loop, the same model as nginx ([4.8](/part-4-raw-servers/#concept-4-8)). Fast and memory-efficient, but your code must never block the loop.
+- **<a id="concept-11-14" class="concept-num" href="#concept-11-14">11.14</a> Undertow.** Was the third Spring Boot option, but [Spring Boot 4 dropped it](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide) because Undertow doesn't yet support the required Servlet 6.1 baseline. You'll still meet it in older Spring Boot 3 services.
+- **<a id="concept-11-15" class="concept-num" href="#concept-11-15">11.15</a> Virtual threads (Java 21+).** Set `spring.threads.virtual.enabled=true` and each request gets its own cheap JVM-managed thread. A request blocked on I/O parks its virtual thread and frees the OS thread underneath. With Tomcat, the 200-thread cap then stops mattering, and `max-connections` becomes the real limit. They help I/O-bound apps, not CPU-bound ones.
+
+<TomcatConnector client:visible />
+
+Pick a load, then flip virtual threads on. It's the lab's steps 2 and 3, before you run them.
+
+**Spring Boot behind nginx: the settings that matter**
+
+- `server.address=127.0.0.1` so only nginx can reach port 8080.
+- `server.forward-headers-strategy=native` so Tomcat trusts `X-Forwarded-For` and `X-Forwarded-Proto` from nginx (the Java version of [11.9](#concept-11-9)). Without it, redirects point to `http://` and logs show nginx's IP.
+- `server.shutdown=graceful` so a deploy finishes in-flight requests ([4.12](/part-4-raw-servers/#concept-4-12)).
+- Why nginx still helps: Tomcat's poller handles slow request headers well, but writing a large response to a slow client still ties up a platform worker thread. nginx's buffering, TLS termination and static files take that load off the JVM.
+- A classic Java 502: the JVM is still warming up, or paused in garbage collection, when nginx connects. Watch for it after every deploy.
+
+**Java lab** (one sandbox)
+
+1. Build a Spring Boot app with a `/slow` endpoint that sleeps 2 seconds, and put nginx in front.
+2. Load test with `wrk -c400`. With 200 platform threads, latency roughly doubles once more than 200 requests are in flight.
+3. Set `spring.threads.virtual.enabled=true`, rerun and compare.
+4. Run `jcmd <pid> Thread.print` during the test and count the `http-nio` worker threads in each mode.
+5. Log `request.getRemoteAddr()` with and without `forward-headers-strategy` and see the real client IP appear.
+6. Set `server.tomcat.accept-count=1`, flood the app, and watch `ListenOverflows` climb with `nstat` (field guide, TCP drops step 2).
+
+**In the sandbox**
+
+1. Write a WSGI app as one bare function with no framework. Run it with Gunicorn. This shows how thin the interface really is.
+2. Do the same with a raw ASGI function under Uvicorn.
+3. Deploy a small Django app: Gunicorn on a Unix socket, nginx in front serving `/static/`, TLS from Part 5, systemd units from Part 2.
+4. Add a slow endpoint (sleeps 2 seconds). Load test sync Gunicorn, Gunicorn with `gthread`, and Uvicorn. Compare throughput.
+5. Remove nginx and point a slow-client script directly at Gunicorn's sync workers. Watch it freeze.
+
+**You've got it when** you can explain what each of nginx, Gunicorn and Django does for a single request, and why removing any one of them hurts.

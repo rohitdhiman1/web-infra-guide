@@ -1,0 +1,24 @@
+---
+title: "Learning path and milestones"
+---
+import LearningPath from '../../components/diagrams/LearningPath';
+
+The 15 parts group into five phases over about 18 weeks. Don't move to the next phase until you can pass its gate without notes.
+
+<LearningPath client:visible />
+
+Observability (Part 12) runs underneath everything: add logging and timing to every lab, not just the dedicated week.
+
+**A weekly rhythm that works with 6-hour sandboxes**
+
+1. **Read (1 to 2 hours, no sandbox):** study the concepts for the part, and write down predictions for the lab.
+2. **Lab session 1 (one sandbox):** build the setup from your cloud-init script and run the main exercises.
+3. **Lab session 2 (a fresh sandbox):** rebuild from scratch, then break things on purpose and fix them.
+4. **Write it up (30 minutes):** a short note in your repo on what surprised you. These notes become your personal nginx playbook.
+
+**Stretch goals once you finish**
+
+- Read nginx's source for the event loop (`src/event/`) and the HTTP request phases (`src/http/`).
+- Write a small dynamic nginx module in C, or try njs (nginx's JavaScript scripting) for custom logic.
+- Rebuild your Part 4 server in Go or Rust and compare it with nginx under the same load test.
+- Explain the full request path from Part 13 to someone else, whiteboard only. Teaching is the final test.

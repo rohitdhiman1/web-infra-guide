@@ -1,0 +1,50 @@
+---
+title: "Part 5 — TLS and HTTPS"
+---
+import ChainOfTrust from '../../components/diagrams/ChainOfTrust';
+import Tls13Handshake from '../../components/diagrams/Tls13Handshake';
+import TlsTermination from '../../components/diagrams/TlsTermination';
+
+HTTPS is just HTTP inside a TLS tunnel. The hard part is trust: certificates, chains and the handshake. Plan about two weeks.
+
+<ChainOfTrust client:visible />
+
+In nginx, `ssl_certificate` points at `fullchain.pem` (leaf first, then intermediates) and `ssl_certificate_key` at the private key, which never leaves the server. Browsers sometimes hide a missing intermediate by fetching or caching it themselves; curl, Python and Java clients usually don't, which is why "it works in my browser" proves nothing.
+
+<Tls13Handshake client:visible />
+
+Step through it, then run `openssl s_client -connect example.com:443 -servername example.com -msg` and match each printed message to a step here.
+
+<TlsTermination client:visible />
+
+In nginx: termination is `listen 443 ssl` plus `proxy_pass http://...`. Re-encryption is `proxy_pass https://...` with `proxy_ssl_verify on` and `proxy_ssl_trusted_certificate` pointing at your internal CA. Passthrough lives in the `stream` block, often with `ssl_preread` to route by SNI without decrypting.
+
+**Concepts**
+
+- **<a id="concept-5-1" class="concept-num" href="#concept-5-1">5.1</a> The three goals.** Confidentiality (encryption), integrity (no tampering) and authentication (you are talking to the real server). Certificates handle the third.
+- **<a id="concept-5-2" class="concept-num" href="#concept-5-2">5.2</a> Symmetric vs asymmetric crypto.** Asymmetric keys (RSA, ECDSA, Ed25519) prove identity and agree on secrets. Fast symmetric ciphers (AES-GCM, ChaCha20-Poly1305) encrypt the actual data.
+- **<a id="concept-5-3" class="concept-num" href="#concept-5-3">5.3</a> Key exchange and forward secrecy.** Ephemeral Diffie-Hellman (ECDHE, usually X25519) creates fresh keys per session. Stealing the server's key later can't decrypt old traffic. Hybrid post-quantum exchange (X25519 combined with ML-KEM) is now the default in current browsers and OpenSSL.
+- **<a id="concept-5-4" class="concept-num" href="#concept-5-4">5.4</a> X.509 certificates.** A public key plus identity (Subject Alternative Names), validity dates and a CA's signature. Modern clients check the SAN, not the old Common Name.
+- **<a id="concept-5-5" class="concept-num" href="#concept-5-5">5.5</a> The chain of trust.** Leaf certificate → intermediate CA → root CA in the client's trust store. The server must send the intermediates. A missing intermediate is the most common HTTPS misconfiguration.
+- **<a id="concept-5-6" class="concept-num" href="#concept-5-6">5.6</a> The TLS 1.3 handshake.** ClientHello (with key share) → ServerHello, certificate and Finished → client Finished. One round trip. TLS 1.2 needed two.
+- **<a id="concept-5-7" class="concept-num" href="#concept-5-7">5.7</a> Session resumption and 0-RTT.** Session tickets let returning clients skip work. 0-RTT early data saves a round trip but can be replayed, so only allow it for idempotent requests.
+- **<a id="concept-5-8" class="concept-num" href="#concept-5-8">5.8</a> SNI.** Server Name Indication puts the hostname in the ClientHello. It lets one IP serve many certificates. nginx picks a `server` block with it.
+- **<a id="concept-5-9" class="concept-num" href="#concept-5-9">5.9</a> ALPN.** The client and server agree on the application protocol during the handshake, such as `h2` or `http/1.1`. HTTP/2 negotiation depends on it.
+- **<a id="concept-5-10" class="concept-num" href="#concept-5-10">5.10</a> Cipher suites and protocol versions.** Allow only TLS 1.2 and 1.3 with modern AEAD ciphers. Mozilla's SSL Configuration Generator gives sane presets.
+- **<a id="concept-5-11" class="concept-num" href="#concept-5-11">5.11</a> Revocation.** CRLs and OCSP, and why they work poorly. The industry is responding with ever shorter certificate lifetimes instead; the CA/Browser Forum has voted to cut the maximum to 47 days by 2029.
+- **<a id="concept-5-12" class="concept-num" href="#concept-5-12">5.12</a> ACME and Let's Encrypt.** Automated certificate issuance. Know the HTTP-01 challenge (a file on port 80) and DNS-01 (a TXT record, needed for wildcards). With short lifetimes, automated renewal is mandatory.
+- **<a id="concept-5-13" class="concept-num" href="#concept-5-13">5.13</a> HSTS.** `Strict-Transport-Security` tells browsers to never use plain HTTP for your site. Learn `max-age`, `includeSubDomains` and preload, and their risks.
+- **<a id="concept-5-14" class="concept-num" href="#concept-5-14">5.14</a> TLS termination vs passthrough vs re-encryption.** Decrypt at the proxy, pass encrypted bytes through to the backend, or decrypt and re-encrypt. Each changes what the proxy can see and do.
+- **<a id="concept-5-15" class="concept-num" href="#concept-5-15">5.15</a> Mutual TLS (mTLS).** The client also presents a certificate. Used for service-to-service auth and zero-trust networks.
+
+**In the sandbox**
+
+1. With `openssl`, create your own root CA, an intermediate CA and a server certificate with SANs. Inspect each with `openssl x509 -text -noout`.
+2. Wrap your Part 4 server with Python's `ssl` module. Connect with `curl --cacert ca.pem` and then without it, and read the error.
+3. Serve only the leaf, without the intermediate. Watch which clients fail.
+4. Run `openssl s_client -connect <host>:443 -servername <host>` against real sites. Read the chain, protocol and cipher.
+5. Capture a handshake with tcpdump and open it in Wireshark. Set `SSLKEYLOGFILE` in curl so Wireshark can decrypt it, and see the HTTP inside.
+6. Point a real domain at a VM, get a Let's Encrypt certificate with certbot, and test the result with SSL Labs' server test.
+7. Set up mTLS: issue a client certificate from your CA and require it on the server.
+
+**You've got it when** you can explain each message of a TLS 1.3 handshake, and fix a "certificate verify failed" error by reading the chain.

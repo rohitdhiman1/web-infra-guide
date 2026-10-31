@@ -1,0 +1,64 @@
+---
+title: "Part 1 — Networking foundations"
+---
+import LayerModel from '../../components/diagrams/LayerModel';
+import TcpLifecycle from '../../components/diagrams/TcpLifecycle';
+import DnsResolution from '../../components/diagrams/DnsResolution';
+
+Every HTTP problem eventually becomes a network problem, so this layer pays back forever. Plan about one week.
+
+<LayerModel client:visible />
+
+Keep this picture in mind for every part of the guide. When something breaks, the first question is always which envelope is damaged.
+
+<TcpLifecycle client:visible />
+
+Press Next to step through it packet by packet. The states on each side are exactly what `ss -tan` prints, so you can match this picture to a live server. The side that closes first waits in TIME\_WAIT, which is why busy proxies can run short of ports ([1.5](#concept-1-5)).
+
+<DnsResolution client:visible />
+
+Run `dig +trace shop.example.com` and you'll see these exact referrals printed in order ([1.10](#concept-1-10)).
+
+## DNS records you must know
+
+A DNS zone is a list of records: a name, a type, a TTL and a value. These are the ones a backend engineer meets.
+
+| Record | What it does | The gotcha |
+| --- | --- | --- |
+| **A** | Name → IPv4 address, e.g. `203.0.113.10` | Several A records spread load crudely, with no health checks |
+| **AAAA** | Name → IPv6 address | Clients try IPv6 first; a broken IPv6 path looks like random slowness |
+| **CNAME** | Name → another name, an alias | Not allowed at the zone apex (`example.com`), and no other records on the same name |
+| **ALIAS / ANAME** | A CNAME-like alias at the apex (Route 53 calls it an alias record) | Provider-specific: the DNS host resolves it for you |
+| **NS** | Which servers are authoritative for the zone | Changing name servers waits on the TLD's TTL, often 1 to 2 days |
+| **TXT** | Free text: domain verification, SPF, ACME DNS-01 challenges | Long values split into quoted chunks |
+| **CAA** | Which CAs may issue certificates for the name | A CAA record that leaves out your CA silently blocks issuance |
+| **MX** | Mail servers for the domain | Nothing to do with web traffic, but often broken during migrations |
+| **HTTPS / SVCB** | Advertises HTTP/3 and other connection hints | How browsers can skip the `Alt-Svc` upgrade ([6.7](/part-6-http2-http3/#concept-6-7)) |
+
+**TTL is a promise about caching.** A record with TTL 3600 may be served from caches for up to an hour after you change it. Before a migration, lower the TTL to 60 a day ahead, so the switch spreads fast.
+
+**Try it:** `dig www.github.com` shows a CNAME chain ending in A records. `dig example.com CAA` and `dig example.com NS` show the others. Add `+short` for just the values.
+
+**Concepts**
+
+- **<a id="concept-1-1" class="concept-num" href="#concept-1-1">1.1</a> The layer model.** Know which layer each thing lives at: IP (routing packets), TCP or UDP (transport), TLS (security), HTTP (application). Debugging means asking "which layer failed?"
+- **<a id="concept-1-2" class="concept-num" href="#concept-1-2">1.2</a> IP addresses and subnets.** IPv4 vs IPv6, CIDR notation like 10.0.0.0/16, private vs public ranges. Cloud VPCs are built entirely from this.
+- **<a id="concept-1-3" class="concept-num" href="#concept-1-3">1.3</a> TCP vs UDP.** TCP gives reliable, ordered byte streams with retransmission and flow control. UDP sends independent datagrams with no guarantees. HTTP/1.1 and HTTP/2 use TCP; HTTP/3 uses UDP via QUIC.
+- **<a id="concept-1-4" class="concept-num" href="#concept-1-4">1.4</a> The three-way handshake.** SYN, SYN-ACK, ACK. It costs one round trip before any data moves, which is why connection reuse matters so much.
+- **<a id="concept-1-5" class="concept-num" href="#concept-1-5">1.5</a> Connection teardown and TIME\_WAIT.** FIN and ACK in both directions, or RST for an abrupt close. The side that closes first sits in TIME\_WAIT. Busy proxies can run out of ports because of it.
+- **<a id="concept-1-6" class="concept-num" href="#concept-1-6">1.6</a> Ports and the 4-tuple.** A connection is identified by source IP, source port, destination IP and destination port. Ephemeral ports (the client side) are a finite pool, roughly 28,000 by default on Linux.
+- **<a id="concept-1-7" class="concept-num" href="#concept-1-7">1.7</a> Sockets.** The OS API for networking. Servers call `bind`, `listen` and `accept`; clients call `connect`. Every server you will ever touch is built on these calls.
+- **<a id="concept-1-8" class="concept-num" href="#concept-1-8">1.8</a> The listen backlog.** Completed connections wait in a queue until the server accepts them. If it fills, new clients see timeouts or resets.
+- **<a id="concept-1-9" class="concept-num" href="#concept-1-9">1.9</a> Latency, RTT and bandwidth.** Round-trip time dominates web performance more than bandwidth. Learn to reason in round trips: DNS + TCP + TLS + request.
+- **<a id="concept-1-10" class="concept-num" href="#concept-1-10">1.10</a> DNS.** How a name becomes an IP: resolvers, root and TLD servers, authoritative servers. Know A, AAAA, CNAME, NS, TXT and CAA records, and how TTL controls caching.
+- **<a id="concept-1-11" class="concept-num" href="#concept-1-11">1.11</a> NAT and firewalls.** Your VM's private IP is translated to a public one. Security groups and firewalls filter by port and source. "Connection refused" and "connection timed out" mean very different things here.
+
+**In the sandbox**
+
+1. On one VM, run `nc -l 9000`. From another, run `nc <ip> 9000` and type. You just made a raw TCP connection.
+2. Run `sudo tcpdump -i any -nn port 9000` during that test. Find the SYN, SYN-ACK and ACK, then the FIN packets when you close.
+3. Connect to a closed port, then to a port blocked by the security group. Compare "refused" (an RST came back) with "timed out" (nothing came back).
+4. Use `dig +trace example.com` to walk the full DNS resolution chain. Then check `dig example.com A` twice and watch the TTL count down.
+5. Run `ss -tan` while connections open and close. Spot the ESTABLISHED and TIME\_WAIT states.
+
+**You've got it when** you can draw the packets for opening, using and closing a TCP connection, and explain why "refused" and "timed out" point to different causes.

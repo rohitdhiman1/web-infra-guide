@@ -1,0 +1,25 @@
+---
+title: "Part 12 — Observability and debugging"
+---
+The people others call "nginx experts" are mostly fast debuggers. They read logs and timings and know which layer broke. Practise this across every part, then spend a dedicated week on it.
+
+**Concepts**
+
+- **<a id="concept-12-1" class="concept-num" href="#concept-12-1">12.1</a> Access logs.** Define a custom `log_format` that includes `$request_time`, `$upstream_response_time`, `$upstream_addr`, `$upstream_status` and `$request_id`. JSON format makes logs easy to query.
+- **<a id="concept-12-2" class="concept-num" href="#concept-12-2">12.2</a> Reading the timings.** `$request_time` is total time with the client. `$upstream_response_time` is time spent waiting on the backend. A big gap between them points at a slow client or network, not the app.
+- **<a id="concept-12-3" class="concept-num" href="#concept-12-3">12.3</a> Error logs.** Levels from `debug` to `emerg`. Learn the common messages: "connect() failed (111: Connection refused)", "upstream timed out (110)", "no live upstreams", "client intended to send too large body".
+- **<a id="concept-12-4" class="concept-num" href="#concept-12-4">12.4</a> Request IDs.** Generate `$request_id` in nginx, pass it to the backend in a header, and log it in both places. One request can then be traced end to end.
+- **<a id="concept-12-5" class="concept-num" href="#concept-12-5">12.5</a> stub\_status.** Built-in counters for active, reading, writing and waiting connections. The starting point for metrics.
+- **<a id="concept-12-6" class="concept-num" href="#concept-12-6">12.6</a> Metrics and dashboards.** Export nginx metrics to Prometheus with nginx-prometheus-exporter and graph them in Grafana. Track request rate, error rate and latency percentiles.
+- **<a id="concept-12-7" class="concept-num" href="#concept-12-7">12.7</a> Distributed tracing.** The OpenTelemetry module for nginx sends spans so you can see time spent in each hop.
+- **<a id="concept-12-8" class="concept-num" href="#concept-12-8">12.8</a> The layer-by-layer debugging method.** DNS (`dig`) → TCP (`nc -vz`) → TLS (`openssl s_client`) → HTTP (`curl -v`) → nginx logs → app logs. Stop at the first layer that fails.
+- **<a id="concept-12-9" class="concept-num" href="#concept-12-9">12.9</a> Packet-level debugging.** `tcpdump` to capture, Wireshark to read. Use it when logs disagree with what you expect.
+
+**In the sandbox**
+
+1. Create a JSON log format with all the timing fields. Ship logs to CloudWatch or Cloud Logging and query them for the slowest requests.
+2. Run a "break it" drill: a partner, or a script you write, introduces one fault (wrong port, expired certificate, full disk, bad DNS, firewall rule). Find it using only the layer-by-layer method.
+3. Set up Prometheus and Grafana in Docker with the nginx exporter. Graph requests per second during a load test.
+4. Pass `$request_id` through nginx to your Django app and find the same request in both logs.
+
+**You've got it when** you can find the root cause of a broken request in under 10 minutes, without guessing.

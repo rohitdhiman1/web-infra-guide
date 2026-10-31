@@ -1,0 +1,61 @@
+---
+title: "Field guide — where to start looking when something breaks"
+---
+import DebuggingFlow from '../../components/diagrams/DebuggingFlow';
+
+You're right: reading logs alone doesn't make someone senior. What does is forming a hypothesis about *which layer failed*, then running the one command that confirms or kills it. Every layer fails with its own signature, and this section teaches you to read them.
+
+## The method
+
+1. **Name the symptom exactly.** The exact error text, the status code, who is affected, since when, and whether it's every request or only some.
+2. **Place it in a layer.** Use the flow below. "Timed out" and "refused" are different layers; so are 502 and 504.
+3. **Test hop by hop.** Run the same request from the client, from the nginx host, then from the app host. The hop where it starts working is where the fault lives.
+4. **Ask what changed.** A deploy, a certificate renewal, a DNS edit, a security group change, a traffic spike. Most incidents follow a change.
+5. **Change one thing at a time,** and predict the result before you look.
+
+<DebuggingFlow client:visible />
+
+Four questions, asked in order, place almost any failure in under two minutes. Only then is it worth opening application logs.
+
+## Symptom → layer → first command
+
+| What you see | Likely layer | Run this first | What it tells you |
+| --- | --- | --- | --- |
+| `Could not resolve host` | DNS | `dig <name>` and `dig @1.1.1.1 <name>` | Record missing, or only your resolver is wrong |
+| `Connection timed out` | Network or firewall | `nc -vz -w3 <host> 443` | Packets silently dropped: security group, NACL, routing |
+| `Connection refused` | Nothing listening | `ss -ltnp` on the server | Process down, wrong port, or bound to 127.0.0.1 only |
+| `Connection reset by peer` | TCP, proxy or app | `tcpdump -nn 'tcp[tcpflags] & tcp-rst != 0'` | Which side sends the RST, and when |
+| `certificate verify failed` | TLS trust | `openssl s_client -connect <host>:443 -servername <host> -showcerts` | Missing intermediate, expired or wrong hostname |
+| `handshake failure`, `wrong version` | TLS config | `openssl s_client -tls1_2` and `-tls1_3` | Protocol, cipher or SNI mismatch |
+| 502 Bad Gateway | nginx → upstream | nginx `error.log`, then curl the backend from the nginx host | Backend down, crashed or on the wrong port |
+| 504 Gateway Timeout | Slow upstream | `$upstream_response_time` in the access log | App or database too slow for `proxy_read_timeout` |
+| 499 in nginx logs | Client gave up | Compare `$request_time` with the client or load balancer timeout | Something in front has a shorter timeout than the app |
+| 413 | Request size | `client_max_body_size` | Upload bigger than the limit |
+| Bursts of 429 or 503 | Rate limiting | error log: `limiting requests` | Limit too tight, or a real abuser |
+| Slow, but no errors | Somewhere in the path | the `curl -w` timing below | Which phase eats the time |
+| Fails on some requests only | One bad backend | `$upstream_addr` in the access log | Which server is sick |
+| Works in curl, fails in browser | Browser policy | DevTools Console and Network | CORS, HSTS or mixed content |
+
+**The single most useful command** — it splits any slow request into phases:
+
+```bash
+curl -o /dev/null -s -w 'dns:        %{time_namelookup}\nconnect:    %{time_connect}\ntls:        %{time_appconnect}\nfirst byte: %{time_starttransfer}\ntotal:      %{time_total}\n' https://example.com
+```
+
+Each number is cumulative seconds. A big jump at `connect` means network distance or loss. At `tls`, handshake or certificate trouble. At `first byte`, the server or app is slow. Between `first byte` and `total`, the response is large or the network is slow.
+
+## Is TCP dropping packets?
+
+Dropped packets never appear in application logs. They show up as retransmissions, resets and timeouts, so you look for those. Work down this list:
+
+1. **Retransmits on live connections.** `ss -ti dst <ip>` shows `rtt` and `retrans` per connection. A growing retrans count means loss on the path.
+2. **System-wide counters.** `nstat -az | grep -Ei 'retrans|ListenOverflows|ListenDrops|TCPTimeouts'`. Run it twice a minute apart and compare. Growing `ListenOverflows` or `ListenDrops` means the accept backlog is full: the app isn't accepting fast enough.
+3. **Watch the wire.** `tcpdump -i any -nn host <ip> and port 443`. Repeated SYNs with no SYN-ACK mean a firewall or backlog drop. An RST means something actively refused. In Wireshark, filter on `tcp.analysis.retransmission`.
+4. **Loss along the path.** `mtr -rwzc 100 <host>`. Loss that continues to the last hop is real. Loss at one middle hop only is usually just a router deprioritising ICMP.
+5. **SYN floods and backlog.** `dmesg | grep -i 'syn flooding'` means the kernel switched to SYN cookies under pressure.
+6. **Connection tracking.** `dmesg | grep conntrack` showing "table full, dropping packet" means the firewall's state table overflowed. Check with `conntrack -S`.
+7. **The NIC and cloud limits.** `ip -s link` and `ethtool -S eth0` show interface drops. On AWS, `ethtool -S eth0 | grep allowance` reveals when the instance hit its bandwidth, packets-per-second or conntrack limits.
+8. **MTU black holes.** Small requests work but large responses hang, often over VPNs. `ping -M do -s 1472 <host>` fails if the path can't carry full 1500-byte packets.
+9. **Cloud firewalls.** VPC Flow Logs show `REJECT` for blocked traffic. Security groups are stateful; NACLs are stateless and need the ephemeral port range open for return traffic.
+
+**Lab:** on a sandbox VM, add loss with `tc qdisc add dev eth0 root netem loss 5%`. Then find it with each tool above before removing it with `tc qdisc del dev eth0 root`. Next, fill the backlog: run a server with `listen(1)` that sleeps before accepting, hit it with `wrk`, and watch `ListenOverflows` climb.

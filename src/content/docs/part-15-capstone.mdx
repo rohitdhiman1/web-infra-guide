@@ -1,0 +1,35 @@
+---
+title: "Part 15 — Capstone: build it, break it, rebuild it"
+---
+The capstone ties every part together into one production-shaped system, then proves it survives failure. Plan two 6-hour sandbox windows, fully scripted so the second one starts from Git.
+
+**What you build**
+
+1. Terraform or CLI scripts that create a VPC across two zones, an ALB, two nginx VMs and three app VMs running Django under Gunicorn (or Spring Boot on Tomcat).
+2. nginx doing path routing (`/api` vs `/static`), microcaching, rate limiting, JSON logs with timings, and security headers.
+3. TLS terminated at the ALB with a managed certificate, then re-encrypted to nginx using your own CA (Part 5).
+4. Configs deployed through your CI pipeline from Part 14, never by hand.
+5. A dashboard with request rate, error rate and p99 latency (Part 12).
+
+**Failure drills**
+
+Run a steady `wrk` load during every drill. Before each one, write down what you expect to happen, then compare.
+
+| Drill | How to cause it | What should happen |
+| --- | --- | --- |
+| Lose one nginx node | Stop nginx on one VM | The ALB marks it unhealthy; a few errors at most |
+| Lose one app node | Kill Gunicorn on one VM | nginx retries elsewhere ([9.8](/part-9-load-balancing/#concept-9-8)); users see no errors |
+| Lose a whole zone | Stop every instance in one zone | The other zone carries the load, just slower |
+| Slow database | Add a 3-second sleep to a query | 504s from the right hop, as the timeout chain predicts ([13.9](/part-13-edge/#concept-13-9)) |
+| Traffic spike | Run `wrk` at ten times normal load | Rate limits return 429; the microcache absorbs reads |
+| Broken config | Push a config with a typo | CI blocks it; if forced, `nginx -t` refuses the reload |
+| Expired inner certificate | Swap an expired cert onto nginx's re-encryption hop | The ALB's health checks fail; your expiry alarm fires first |
+| Canary release | Send 10% of traffic to a new app version via upstream weights | Errors stay at the canary; then shift to 100% |
+
+**Deliverables for your repo**
+
+- An architecture diagram of what you built.
+- A one-page runbook using the field guide's commands.
+- A short postmortem for the drill that surprised you most: what happened, how you found it, what you'd change.
+
+**You've got it when** the system survives every drill, and you can tear it down and rebuild it from Git alone in under 30 minutes.

@@ -1,0 +1,30 @@
+---
+title: "One hostname, three checks — DNS, TLS and nginx"
+---
+import HostnameChecks from '../../components/diagrams/HostnameChecks';
+
+When a browser opens `https://www.example.com`, three different systems check that same name, one after another. Most "works on one domain, breaks on another" bugs are one of these three checks failing.
+
+<HostnameChecks client:visible />
+
+Click each hostname and predict which check fails before you look. The zone, certificate and nginx config shown underneath are fixed; only the name changes.
+
+| Check | What is compared | When it fails, you see |
+| --- | --- | --- |
+| **1. DNS** | The name against the zone's A, AAAA and CNAME records | `Could not resolve host`, or the right name pointing at the wrong IP |
+| **2. TLS certificate** | The name the client sent in SNI against the certificate's SAN list | `ERR_CERT_COMMON_NAME_INVALID`, curl's `no alternative certificate subject name matches` |
+| **3. nginx** | The `Host` header (and SNI) against each `server_name` | The wrong site, or the `default_server` answering instead |
+
+## SAN, SNI and server\_name in plain words
+
+- **SAN (Subject Alternative Name)** is the list of hostnames a certificate is valid for. Modern clients ignore the old Common Name field and check only the SAN list.
+- **A wildcard covers exactly one label.** `*.example.com` covers `api.example.com` but not `example.com` itself and not `beta.api.example.com`. That's why most certificates list both `example.com` and `*.example.com`.
+- **SNI (Server Name Indication)** is the hostname the client puts in its TLS ClientHello. nginx uses it to choose which certificate to present.
+- **`server_name`** is nginx's list of names for a `server` block. It's matched against the `Host` header, in the order exact, leading wildcard, trailing wildcard, regex, then `default_server` ([7.5](/part-7-nginx-core/#concept-7-5)).
+- **A CNAME does not change the name being checked.** If `www.example.com` is a CNAME to `my-lb.cloud.net`, the browser still expects a certificate for `www.example.com`. This trips up almost everyone the first time they put a site behind a CDN or load balancer.
+
+## The 30-second version you can tell anyone
+
+> "First, DNS turns the name into an IP address, following any CNAMEs on the way. Then, during the TLS handshake, the browser sends the name as SNI, and the server must show a certificate whose SAN list includes that name. Finally, nginx reads the Host header and picks the `server` block whose `server_name` matches. Same name, three checks. When something breaks, find which of the three said no."
+
+**In the sandbox:** point an A record and a CNAME at a VM. Get one Let's Encrypt certificate covering two names, and set up two `server` blocks. Then break each check on purpose: request a name missing from the SANs, remove a `server_name`, and point the CNAME at the wrong target. Read the exact error each one produces with `curl -v`.

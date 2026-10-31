@@ -1,0 +1,27 @@
+---
+title: "Part 2 — The Linux layer"
+---
+Web servers are Linux programs first. Knowing what the kernel does for them explains most nginx tuning advice. Plan about one week, overlapping with Part 4.
+
+**Concepts**
+
+- **<a id="concept-2-1" class="concept-num" href="#concept-2-1">2.1</a> File descriptors.** Every socket, file and pipe is an integer handle. A server holding 10,000 connections holds at least 10,000 descriptors.
+- **<a id="concept-2-2" class="concept-num" href="#concept-2-2">2.2</a> Limits: ulimit and nofile.** Per-process caps on open descriptors. "Too many open files" is a classic outage; nginx's `worker_rlimit_nofile` exists because of it.
+- **<a id="concept-2-3" class="concept-num" href="#concept-2-3">2.3</a> Blocking vs non-blocking I/O.** A blocking `read` freezes the thread until data arrives. Non-blocking calls return immediately, so one thread can juggle many sockets.
+- **<a id="concept-2-4" class="concept-num" href="#concept-2-4">2.4</a> I/O multiplexing: select, poll, epoll.** Ask the kernel "which of these sockets is ready?" `select` and `poll` scan every descriptor; `epoll` reports only the ready ones and scales to huge counts. nginx is built on epoll.
+- **<a id="concept-2-5" class="concept-num" href="#concept-2-5">2.5</a> Processes vs threads.** Processes are isolated and crash-safe; threads share memory and are cheaper. nginx uses one master process plus a few single-threaded worker processes.
+- **<a id="concept-2-6" class="concept-num" href="#concept-2-6">2.6</a> Signals.** How you talk to a running server: SIGHUP to reload config, SIGTERM to stop, SIGQUIT for graceful shutdown, SIGUSR1 to reopen logs. `nginx -s reload` sends these for you.
+- **<a id="concept-2-7" class="concept-num" href="#concept-2-7">2.7</a> Zero-copy with sendfile.** The kernel copies a file straight to a socket without passing through user space. It is why nginx serves static files so cheaply.
+- **<a id="concept-2-8" class="concept-num" href="#concept-2-8">2.8</a> Kernel network tuning.** Know what `net.core.somaxconn` (backlog ceiling), `net.ipv4.ip_local_port_range` (ephemeral ports) and `tcp_tw_reuse` do. Don't tune blindly; measure first.
+- **<a id="concept-2-9" class="concept-num" href="#concept-2-9">2.9</a> SO\_REUSEADDR and SO\_REUSEPORT.** The first lets a restarted server rebind a port right away. The second lets several processes share one port with kernel load balancing, which nginx supports via `reuseport`.
+- **<a id="concept-2-10" class="concept-num" href="#concept-2-10">2.10</a> Privileged ports and capabilities.** Ports below 1024 need root or the CAP\_NET\_BIND\_SERVICE capability. That is why nginx's master runs as root and workers drop to an unprivileged user.
+- **<a id="concept-2-11" class="concept-num" href="#concept-2-11">2.11</a> systemd.** How servers are started, restarted and logged in production. Learn unit files, `systemctl` and `journalctl`.
+
+**In the sandbox**
+
+1. Run `ulimit -n`, then write a tiny script that opens files until it fails. Raise the limit and repeat.
+2. Use `strace -f -e trace=network,epoll_wait nginx` (or attach with `strace -p`) and watch nginx's workers sit in `epoll_wait`.
+3. Run `ls -l /proc/<pid>/fd` on a busy server to see its sockets as descriptors.
+4. Write a systemd unit for your own Python server from Part 4 and make it restart on crash.
+
+**You've got it when** you can explain why nginx uses a few worker processes with an event loop instead of a thread per connection.

@@ -1,0 +1,40 @@
+---
+title: "Part 7 — nginx core"
+---
+import LocationMatching from '../../components/diagrams/LocationMatching';
+
+This is where everything from Parts 1 to 6 becomes configuration. Most nginx confusion comes from three things: how a request picks a `server`, how it picks a `location`, and how directives inherit. Master those and the rest is reference lookup. Plan two weeks.
+
+<LocationMatching client:visible />
+
+Click each URL and predict the winner before you look. Then copy this config into a sandbox, have each block `return 200 "line N";`, and confirm with curl (lab step 3).
+
+**Concepts**
+
+- **<a id="concept-7-1" class="concept-num" href="#concept-7-1">7.1</a> Architecture.** One master process (reads config, binds ports, manages workers) and N worker processes, each an event loop. `worker_processes auto;` gives one per CPU core; `worker_connections` caps connections per worker.
+- **<a id="concept-7-2" class="concept-num" href="#concept-7-2">7.2</a> Open source vs nginx Plus.** F5 sells nginx Plus with extras like active health checks, a live API dashboard and `least_time` balancing. Learn the open-source version first, and note when a guide assumes Plus.
+- **<a id="concept-7-3" class="concept-num" href="#concept-7-3">7.3</a> Config structure.** Contexts nest: `main` → `events` and `http` → `server` → `location`. There are also `stream` (raw TCP/UDP) and `mail` contexts.
+- **<a id="concept-7-4" class="concept-num" href="#concept-7-4">7.4</a> Directive inheritance.** Values flow down from outer contexts. The trap: array directives like `add_header` and `proxy_set_header` are *replaced*, not merged, if you set any at an inner level.
+- **<a id="concept-7-5" class="concept-num" href="#concept-7-5">7.5</a> Server selection.** nginx first matches `listen` (IP and port), then `server_name` from the Host header or SNI. Order: exact name, leading wildcard, trailing wildcard, regex, then `default_server`.
+- **<a id="concept-7-6" class="concept-num" href="#concept-7-6">7.6</a> Location matching.** `=` exact match wins immediately. Otherwise nginx finds the longest prefix; `^~` on it stops the search. Then regexes (`~` and `~*`) are tried in file order, and the first match wins. Else the longest prefix is used.
+- **<a id="concept-7-7" class="concept-num" href="#concept-7-7">7.7</a> root vs alias.** `root` appends the full URI to the path; `alias` replaces the matched location part. Mixing them up is a top cause of 404s.
+- **<a id="concept-7-8" class="concept-num" href="#concept-7-8">7.8</a> try\_files.** Check files in order, then fall back, for example `try_files $uri $uri/ /index.html;` for single-page apps.
+- **<a id="concept-7-9" class="concept-num" href="#concept-7-9">7.9</a> index and autoindex.** Which file serves a directory request, and whether to list directory contents.
+- **<a id="concept-7-10" class="concept-num" href="#concept-7-10">7.10</a> Variables.** `$host`, `$uri`, `$request_uri`, `$args`, `$remote_addr`, `$scheme` and more. `map` builds new variables from old ones and is the clean way to do conditional logic.
+- **<a id="concept-7-11" class="concept-num" href="#concept-7-11">7.11</a> rewrite and return.** `return 301 https://$host$request_uri;` for redirects. `rewrite` changes the URI with regexes. Prefer `return` when you can.
+- **<a id="concept-7-12" class="concept-num" href="#concept-7-12">7.12</a> "If is evil."** `if` inside `location` behaves in surprising ways. Use `map`, `try_files` or separate locations instead.
+- **<a id="concept-7-13" class="concept-num" href="#concept-7-13">7.13</a> MIME types and default\_type.** The `types` block maps extensions to `Content-Type`.
+- **<a id="concept-7-14" class="concept-num" href="#concept-7-14">7.14</a> Request processing phases.** nginx handles each request in ordered phases: rewrite, access, try\_files, content, log. Knowing them explains why directive order in the file often doesn't matter.
+- **<a id="concept-7-15" class="concept-num" href="#concept-7-15">7.15</a> Modules.** Core functionality is split into modules, some compiled in and some dynamic. `nginx -V` shows what your build includes.
+- **<a id="concept-7-16" class="concept-num" href="#concept-7-16">7.16</a> Safe operations.** `nginx -t` to test, `nginx -T` to dump the full config, `nginx -s reload` for a zero-downtime reload. Reload starts new workers and drains old ones gracefully.
+
+**In the sandbox**
+
+1. Install nginx from the official nginx.org repo (newer than the distro package). Read every line of the default config.
+2. Host two sites on one VM with two `server_name` values. Test with `curl -H 'Host: a.test' http://<ip>/`.
+3. Write ten `location` blocks mixing `=`, `^~`, prefix and regex. Predict which one answers each of twenty URLs, then check by returning a different text from each one.
+4. Reproduce the `root` vs `alias` bug on purpose, and fix it.
+5. Deploy a single-page app build with `try_files` and long cache headers on hashed assets.
+6. During a `wrk` load test, run `nginx -s reload` and confirm zero failed requests.
+
+**You've got it when** you can predict which `server` and `location` will handle any request without running it.

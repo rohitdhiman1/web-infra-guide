@@ -1,0 +1,30 @@
+---
+title: "Part 6 — HTTP/2 and HTTP/3"
+---
+import HolBlocking from '../../components/diagrams/HolBlocking';
+
+Both keep HTTP's meaning (methods, headers, status codes) and change only how it travels. Plan about one week.
+
+<HolBlocking client:visible />
+
+Three responses, nine packets, one loss. Compare the three protocols with the loss on: this is concepts [3.9](/part-3-http11/#concept-3-9), [6.2](#concept-6-2), [6.5](#concept-6-5) and [6.6](#concept-6-6) in one picture.
+
+**Concepts**
+
+- **<a id="concept-6-1" class="concept-num" href="#concept-6-1">6.1</a> Binary framing (HTTP/2).** Messages are split into typed frames (HEADERS, DATA, SETTINGS and others) instead of text lines.
+- **<a id="concept-6-2" class="concept-num" href="#concept-6-2">6.2</a> Streams and multiplexing.** Many requests share one TCP connection at the same time, each as a numbered stream. This removes HTTP-level head-of-line blocking.
+- **<a id="concept-6-3" class="concept-num" href="#concept-6-3">6.3</a> HPACK header compression.** Repeated headers like cookies are sent as small table references instead of full text.
+- **<a id="concept-6-4" class="concept-num" href="#concept-6-4">6.4</a> Flow control and prioritization.** Per-stream windows stop one big download from starving others.
+- **<a id="concept-6-5" class="concept-num" href="#concept-6-5">6.5</a> TCP head-of-line blocking remains.** One lost packet still stalls every HTTP/2 stream on that connection. This is the problem HTTP/3 solves.
+- **<a id="concept-6-6" class="concept-num" href="#concept-6-6">6.6</a> QUIC.** A transport built on UDP with TLS 1.3 built in. Streams are independent, so a loss affects only its own stream. Connections survive IP changes, like a phone switching from Wi-Fi to mobile.
+- **<a id="concept-6-7" class="concept-num" href="#concept-6-7">6.7</a> Discovering HTTP/3.** Browsers first connect over TCP and learn about HTTP/3 from the `Alt-Svc` header (or an HTTPS DNS record), then switch.
+- **<a id="concept-6-8" class="concept-num" href="#concept-6-8">6.8</a> Where each is used.** Browsers to edge proxies speak HTTP/2 or HTTP/3. Proxies to backends usually still speak HTTP/1.1, because the gains are small on a fast internal network. nginx's `proxy_pass` speaks HTTP/1.x to upstreams; gRPC upstreams use `grpc_pass` over HTTP/2.
+
+**In the sandbox**
+
+1. Enable `http2 on;` in nginx (after Part 7). Compare `curl --http1.1 -v` with `curl --http2 -v` and look at the negotiated protocol.
+2. Use `h2load` (from the nghttp2 package) to benchmark HTTP/1.1 vs HTTP/2 with many small requests.
+3. Enable HTTP/3 in nginx with `listen 443 quic reuseport;`, open UDP 443 in the security group, and add the `Alt-Svc` header. Confirm the protocol in browser DevTools.
+4. Use `tc qdisc add dev eth0 root netem loss 2%` on the server to add packet loss. Compare HTTP/2 and HTTP/3 page loads.
+
+**You've got it when** you can explain why HTTP/2 fixed one kind of head-of-line blocking, and why HTTP/3 needed a new transport to fix the other.

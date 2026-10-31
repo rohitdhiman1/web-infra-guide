@@ -1,0 +1,32 @@
+---
+title: "Toolkit and resources"
+---
+These tools come up in almost every lab. Install them in your cloud-init script so every fresh sandbox has them.
+
+| Tool | Layer | What you use it for |
+| --- | --- | --- |
+| `curl -v`, `curl -I`, `curl --resolve` | HTTP, TLS | See every header; test a host before DNS points at it |
+| `nc` (netcat) | TCP | Raw connections; type HTTP by hand; check if a port is open |
+| `tcpdump` | Packets | Capture traffic on the server |
+| Wireshark | Packets, TLS | Read captures; decrypt TLS with a key log file |
+| `dig` | DNS | Records, TTLs, `+trace` the resolution chain |
+| `ss -tanp` | TCP | Connection states, who owns which port |
+| `openssl s_client`, `openssl x509` | TLS | Inspect handshakes, chains and certificates |
+| `testssl.sh` | TLS | Audit protocols, ciphers and common TLS flaws |
+| `strace` | Linux | Watch the system calls a server makes |
+| `wrk`, `k6`, `h2load` | Load | Benchmark HTTP/1.1, scripted scenarios, HTTP/2 |
+| `tc netem` | Network | Add latency and packet loss on purpose |
+| `nginx -t`, `nginx -T`, `nginx -V` | nginx | Test config, dump full config, show build modules |
+| Browser DevTools (Network tab) | HTTP | Protocol, timings, caching and cookies as a browser sees them |
+
+**Reading list**
+
+- [nginx documentation](https://nginx.org/en/docs/): the directive reference, plus the "How nginx processes a request" and "Server names" articles. Read them twice.
+- [MDN HTTP guide](https://developer.mozilla.org/en-US/docs/Web/HTTP): the clearest practical explanation of headers, caching, CORS and cookies.
+- *High Performance Browser Networking* by Ilya Grigorik, [free online](https://hpbn.co/): TCP, TLS, HTTP/2 and latency, explained for engineers.
+- *HTTP: The Definitive Guide* (Gourley and Totty): older, but still the best deep dive into proxies and caching.
+- *The Illustrated TLS 1.3 Connection* at [tls13.xargs.org](https://tls13.xargs.org/): every byte of a handshake, explained.
+- [Mozilla SSL Configuration Generator](https://ssl-config.mozilla.org/): safe TLS settings for nginx.
+- *Beej's Guide to Network Programming* at [beej.us](https://beej.us/guide/bgnet/): the classic sockets tutorial, in C but easy to follow.
+- RFC 9110 (HTTP semantics), RFC 9112 (HTTP/1.1), RFC 9113 (HTTP/2), RFC 9114 (HTTP/3), RFC 8446 (TLS 1.3): read the parts you're working on, not end to end.
+- [Kubernetes: Ingress NGINX retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/): background for [14.4](/part-14-production/#concept-14-4).

@@ -1,0 +1,33 @@
+---
+title: "Part 3 — HTTP/1.1 in depth"
+---
+HTTP/1.1 is plain text, so you can read and write it by hand. Learn it at this level and HTTP/2 and HTTP/3 become "the same meaning, different framing." Plan about two weeks. The reference is RFC 9110 (semantics) and RFC 9112 (HTTP/1.1 framing).
+
+**Concepts**
+
+- **<a id="concept-3-1" class="concept-num" href="#concept-3-1">3.1</a> Message structure.** A request line (`GET /path HTTP/1.1`), headers, an empty line (`\r\n\r\n`), then an optional body. Responses swap the first line for a status line.
+- **<a id="concept-3-2" class="concept-num" href="#concept-3-2">3.2</a> Methods and their properties.** GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS. Know which are *safe* (no side effects) and *idempotent* (safe to retry). Proxies decide whether to retry based on this.
+- **<a id="concept-3-3" class="concept-num" href="#concept-3-3">3.3</a> Status codes.** 1xx informational, 2xx success, 3xx redirect, 4xx client error, 5xx server error. Know these cold: 200, 201, 204, 301, 302, 304, 307, 308, 400, 401, 403, 404, 405, 413, 429, 499 (nginx-specific: client closed), 500, 502, 503, 504.
+- **<a id="concept-3-4" class="concept-num" href="#concept-3-4">3.4</a> 502 vs 503 vs 504.** 502: the upstream gave a bad or no response. 503: the service is unavailable or overloaded. 504: the upstream was too slow. This distinction is the single most useful debugging skill behind a proxy.
+- **<a id="concept-3-5" class="concept-num" href="#concept-3-5">3.5</a> The Host header.** Mandatory in HTTP/1.1. It lets one IP serve many sites (virtual hosting) and drives nginx's `server_name` matching.
+- **<a id="concept-3-6" class="concept-num" href="#concept-3-6">3.6</a> Message length.** A body ends via `Content-Length`, via `Transfer-Encoding: chunked`, or by closing the connection. Getting this wrong causes hangs and request smuggling attacks.
+- **<a id="concept-3-7" class="concept-num" href="#concept-3-7">3.7</a> Chunked transfer encoding.** Each chunk is its size in hex, then the data; a zero-size chunk ends it. Used for streaming when the total size is unknown.
+- **<a id="concept-3-8" class="concept-num" href="#concept-3-8">3.8</a> Persistent connections (keep-alive).** HTTP/1.1 reuses connections by default. `Connection: close` ends them. One connection still handles only one request at a time.
+- **<a id="concept-3-9" class="concept-num" href="#concept-3-9">3.9</a> Head-of-line blocking.** Because of [3.8](#concept-3-8), a slow response blocks everything queued behind it on that connection. Browsers open about 6 connections per host to work around it.
+- **<a id="concept-3-10" class="concept-num" href="#concept-3-10">3.10</a> Content negotiation and compression.** `Accept`, `Accept-Encoding`, `Content-Type`, `Content-Encoding`. gzip and brotli shrink text responses a lot.
+- **<a id="concept-3-11" class="concept-num" href="#concept-3-11">3.11</a> Caching.** `Cache-Control` (max-age, no-cache, no-store, private, public, s-maxage), `ETag` and `If-None-Match`, `Last-Modified` and `If-Modified-Since`, and the 304 Not Modified response. `Vary` tells caches which request headers change the response.
+- **<a id="concept-3-12" class="concept-num" href="#concept-3-12">3.12</a> Redirects.** 301 and 308 are permanent; 302 and 307 are temporary. 307 and 308 keep the method and body, which matters for POST.
+- **<a id="concept-3-13" class="concept-num" href="#concept-3-13">3.13</a> Range requests.** `Range: bytes=0-1023` and the 206 Partial Content response. This powers resumable downloads and video seeking.
+- **<a id="concept-3-14" class="concept-num" href="#concept-3-14">3.14</a> Cookies and state.** `Set-Cookie` with attributes Secure, HttpOnly, SameSite, Domain, Path. HTTP is stateless; cookies are how sessions are layered on top.
+- **<a id="concept-3-15" class="concept-num" href="#concept-3-15">3.15</a> CORS.** Browsers block cross-origin reads unless the server says otherwise via `Access-Control-Allow-*` headers. Learn the preflight OPTIONS request.
+- **<a id="concept-3-16" class="concept-num" href="#concept-3-16">3.16</a> Forwarding headers.** `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Real-IP` and the standard `Forwarded` header. Behind a proxy, the app only learns the real client this way.
+
+**In the sandbox**
+
+1. Talk HTTP by hand: `nc example.com 80`, then type `GET / HTTP/1.1`, `Host: example.com` and an empty line.
+2. Use `curl -v` and `curl -I` against real sites. Read every header and look up any you don't know.
+3. Fetch a page twice with `curl -H 'If-None-Match: "<etag>"'` and get a 304.
+4. Run `curl -r 0-99` for a range request and check the 206.
+5. Open your browser's DevTools Network tab on a big site. Inspect caching headers, cookies and the protocol column.
+
+**You've got it when** you can write a valid HTTP/1.1 request and response from memory, and say what a 502 and a 504 tell you about the upstream.

@@ -1,5 +1,37 @@
 ---
-title: How to use this guide
+title: "How to use this guide"
+tableOfContents:
+  maxHeadingLevel: 2
 ---
+<p class="guide-byline">Oct 25, 2026 · @Rohit Dhiman</p>
 
-Placeholder — content is generated in stage 2.
+Mastery here means you can explain what happens to a request at every layer, from the first TCP packet to the app's response, and fix it when it breaks. The guide climbs that stack in 15 parts, roughly 16 to 18 weeks at 6 to 8 hours a week.
+
+Each part has three pieces:
+
+- **Concepts:** what to understand, numbered so you can track them (1.1, 1.2 and so on).
+- **In the sandbox:** a lab sized to fit one 6-hour cloud window.
+- **You've got it when:** a check you can answer or demonstrate without notes.
+
+**Working with short-lived sandboxes.** Your sandboxes die after about 6 hours, so treat every VM as disposable from day one. Keep all configs, scripts and notes in a Git repo. Put each lab's setup into a cloud-init or user-data script so you can rebuild in minutes. This habit is itself a production skill.
+
+**A good default setup:** two or three small Ubuntu LTS VMs (t3.small or e2-small is plenty), one security group opening ports 22, 80 and 443, and Docker installed for quick experiments. A cheap domain name you control makes the HTTPS parts much more real.
+
+**The rule for every lab:** before you change anything, predict what will happen. Then observe it with curl, tcpdump or the logs. The gap between prediction and result is where the learning is.
+
+## The topics that give you chills, and where each one is tamed
+
+The goal isn't to become a network engineer. It's to know, for any failure, which layer is involved and which command to run first. Every topic below gets a concept list, a picture and a lab where you build it or break it yourself.
+
+| Topic | Where | You'll be able to |
+| --- | --- | --- |
+| TCP/IP and the layers | Part 1 ([1.1](/part-1-networking/#concept-1-1) to [1.11](/part-1-networking/#concept-1-11)) | Read a tcpdump of a full connection |
+| Is TCP dropping packets? | Field guide, after Part 12 | Prove loss, backlog drops or a firewall in minutes |
+| HTTPS and TLS | Part 5 ([5.1](/part-5-tls/#concept-5-1) to [5.10](/part-5-tls/#concept-5-10)) | Explain every handshake message |
+| Root CA and intermediate CA | Part 5 ([5.4](/part-5-tls/#concept-5-4), [5.5](/part-5-tls/#concept-5-5)), lab step 1 | Build your own CA and fix a broken chain |
+| TLS termination | Part 5 ([5.14](/part-5-tls/#concept-5-14)), Part 15 capstone | Choose where to decrypt, and why |
+| Reverse proxy | Part 8 | Map 502, 504, 499 and 413 to a cause |
+| Load balancing | Part 9 | Lose any server with zero user errors |
+| Rate limiting | Part 10 ([10.11](/part-10-caching-security/#concept-10-11)) | Tune `rate`, `burst` and `nodelay` on purpose |
+| Where to start looking | Field guide, Part 12 ([12.8](/part-12-observability/#concept-12-8)) | Find a root cause without guessing |
+| DNS records, SAN, server\_name | Part 1 records table; One hostname, three checks | Explain how one name passes DNS, the certificate and nginx |

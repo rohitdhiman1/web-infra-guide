@@ -1,0 +1,37 @@
+---
+title: "Part 8 — nginx as a reverse proxy"
+---
+import ReverseProxyErrors from '../../components/diagrams/ReverseProxyErrors';
+
+A reverse proxy accepts the client's connection and opens a separate one to the backend. Two connections, two sets of timeouts, two places to fail. Plan two weeks.
+
+<ReverseProxyErrors client:visible />
+
+Log both `$status` (what the client got) and `$upstream_status` (what the backend said). When they differ, you know which connection failed.
+
+**Concepts**
+
+- **<a id="concept-8-1" class="concept-num" href="#concept-8-1">8.1</a> Forward vs reverse proxy.** A forward proxy acts for clients (a corporate proxy). A reverse proxy acts for servers, hiding and protecting the backends.
+- **<a id="concept-8-2" class="concept-num" href="#concept-8-2">8.2</a> proxy\_pass and the trailing slash.** `proxy_pass http://app;` passes the URI unchanged. `proxy_pass http://app/;` replaces the matched location prefix. This one slash causes endless bugs, so test both.
+- **<a id="concept-8-3" class="concept-num" href="#concept-8-3">8.3</a> Header rewriting.** By default nginx sends `Host: <upstream name>`. You usually want `proxy_set_header Host $host;`, plus `X-Real-IP`, `X-Forwarded-For $proxy_add_x_forwarded_for` and `X-Forwarded-Proto $scheme`.
+- **<a id="concept-8-4" class="concept-num" href="#concept-8-4">8.4</a> Trusting the real client IP.** With a cloud load balancer in front, use the `realip` module (`set_real_ip_from`, `real_ip_header`) so logs and rate limits see the real client, not the load balancer.
+- **<a id="concept-8-5" class="concept-num" href="#concept-8-5">8.5</a> Buffering.** By default nginx reads the whole upstream response into buffers, then feeds slow clients itself. This frees the app quickly. Turn it off (`proxy_buffering off;`) for streaming and server-sent events.
+- **<a id="concept-8-6" class="concept-num" href="#concept-8-6">8.6</a> Request body buffering.** nginx also buffers uploads before passing them on. `client_max_body_size` (default 1 MB) is why large uploads return 413.
+- **<a id="concept-8-7" class="concept-num" href="#concept-8-7">8.7</a> The timeout family.** `proxy_connect_timeout`, `proxy_send_timeout`, `proxy_read_timeout`, plus client-side `client_body_timeout` and `send_timeout`. Each maps to a specific failure and status code.
+- **<a id="concept-8-8" class="concept-num" href="#concept-8-8">8.8</a> Upstream keep-alive.** Without it, nginx opens a new TCP connection to the backend per request and can exhaust ephemeral ports. Needs `keepalive` in the upstream block, `proxy_http_version 1.1;` and an empty `Connection` header.
+- **<a id="concept-8-9" class="concept-num" href="#concept-8-9">8.9</a> WebSockets.** An HTTP/1.1 Upgrade handshake, then a long-lived two-way connection. Pass the `Upgrade` and `Connection` headers and raise `proxy_read_timeout`.
+- **<a id="concept-8-10" class="concept-num" href="#concept-8-10">8.10</a> Redirect and cookie rewriting.** `proxy_redirect` fixes `Location` headers pointing at internal hostnames. `proxy_cookie_domain` and `proxy_cookie_path` do the same for cookies.
+- **<a id="concept-8-11" class="concept-num" href="#concept-8-11">8.11</a> Error interception.** `proxy_intercept_errors` and `error_page` let nginx serve friendly error pages instead of the app's.
+- **<a id="concept-8-12" class="concept-num" href="#concept-8-12">8.12</a> Other upstream protocols.** `fastcgi_pass` (PHP-FPM), `uwsgi_pass`, `grpc_pass`, and the `stream` module for proxying raw TCP such as databases.
+- **<a id="concept-8-13" class="concept-num" href="#concept-8-13">8.13</a> Unix domain sockets.** Proxy to `unix:/run/app.sock` when the app is on the same host. No TCP overhead and no exposed port.
+
+**In the sandbox**
+
+1. Put nginx in front of your Part 4 server. Log every incoming header in your server and see exactly what nginx sends.
+2. Test `proxy_pass` with and without the trailing slash across several `location` prefixes. Write down the rule in your own words.
+3. Make your backend sleep 70 seconds and get a 504. Make it crash and get a 502. Point nginx at a closed port and read the error log for each case.
+4. Upload a 5 MB file and get a 413, then fix it.
+5. Count backend connections with `ss -tan | grep :8080 | wc -l` during a load test, with and without upstream keep-alive.
+6. Proxy a WebSocket echo server and keep a connection open past the default 60-second read timeout.
+
+**You've got it when** you can map any 502, 504 or 413 to the exact directive and log line behind it.
