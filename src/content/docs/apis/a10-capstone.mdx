@@ -1,0 +1,93 @@
+---
+title: "A10 — Capstone: design it, build it, break it"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import CapstonePipeline from '../../../components/diagrams/CapstonePipeline.tsx';
+
+Every module so far built one idea in isolation. The capstone puts them in one service, the orders and payments API, then asks you to break it on purpose and explain what happened. That last part is what interviews test: not “do you know what 412 means” but “walk me through what happens when two clients pay for the same order while the gateway is slow”.
+
+## What the finished service does
+
+| Area | Behaviour | From |
+|---|---|---|
+| Orders | `POST`, `GET`, `PATCH` (JSON Merge Patch) with ETags, `If-None-Match` → 304, `If-Match` required (428/412), paid orders locked (409) | A1, A4 |
+| Collections | `GET /orders` newest first, cursor pagination with `next` + `Link`, status filter, page-size limits | A5 |
+| Payments | `POST /orders/{id}/payments` with a required `Idempotency-Key`; replay, 422 on reuse, 409 while in progress; an atomic claim so an order is paid once; the key passed to the gateway | A3 |
+| Errors | RFC 9457 problem details for every failure, with JSON Pointers and the request id | A2 |
+| Edge | `X-Request-Id` on every response; a token bucket per API key with `X-RateLimit-*` headers and 429 + `Retry-After` | A9 |
+| Storage | Postgres: orders (with a version column), payments, idempotency keys | A3–A5 |
+
+## One request through every layer
+
+Pick a scenario and see which layer answers it, with which status and headers.
+
+<CapstonePipeline client:visible />
+
+## Phase 1 — Design before you build
+
+Write the contract first (A2.9): an OpenAPI document for every endpoint above, including every error response and header. Then review it against these questions, the way you'd review an RFC with the teams that will call it.
+
+| Question | Module |
+|---|---|
+| Is every URL a noun, and does every method keep its promise (safe, idempotent)? | A0, A1 |
+| Does every failure have a distinct status code *and* a problem type a client can branch on? | A1, A2 |
+| Which requests can a client retry safely, and how does it know? | A3 |
+| What happens if two people edit the same order at the same moment? | A4 |
+| Can a client walk every order without missing or repeating one while new orders arrive? | A5 |
+| Which future changes would break clients, and what's the versioning and deprecation plan? | A6 |
+| Is anything slow enough to need 202, polling or webhooks? | A7 |
+| Is resource-oriented HTTP the right style for each consumer? | A8 |
+| What are the limits (rate, page size, body size), and how does a client learn about them? | A9 |
+
+## Phase 2 — Build it, then prove it
+
+Build the service in Java, Python or both. When it runs, check it with the **conformance suite**: black-box tests that speak only HTTP, so they run against any implementation in any language. Point them at your server with `BASE_URL`. Both reference implementations pass all of them.
+
+| # | The suite checks |
+|---|---|
+| 1 | Create: `201`, `Location`, `ETag: "1"`, server-computed total |
+| 2 | Validation failure: `422` problem with pointers `#/customer`, `#/currency`, `#/items` |
+| 3 | Missing order: `404` problem, type `order-not-found` |
+| 4 | Wrong method: `405` with a complete `Allow` |
+| 5 | `If-None-Match` → `304`; no `If-Match` → `428`; stale `If-Match` → `412`; current → `200` with the next ETag |
+| 6 | Cursor pagination stays correct when an order arrives between pages; `Link` matches `next` |
+| 7 | Page size 1000 → `400` |
+| 8 | Payments: no key `400`; first `201`; same key replays identical bytes with `Idempotent-Replayed`; changed body `422`; new key `409`; one payment; order `paid` with a new ETag |
+| 9 | A paid order refuses edits: `409`, type `order-locked` |
+| 10 | Request ids echoed in headers and problem bodies |
+| 11 | Enough requests on one key end in a `429` problem with `Retry-After` |
+
+The suite found a real bug while this capstone was being written. The Python version answered `DELETE /orders` with `Allow: POST`, missing `GET`. That's the Starlette behaviour from A1, whose workaround hadn't been carried into the later labs. Black-box tests catch exactly this kind of regression that per-module tests miss.
+
+## Phase 3 — Break it on purpose
+
+Each drill is a small experiment. Predict what will happen, run it, then explain the result using the concept in the right-hand column. Run Postgres from the lab's `compose.yaml` and keep a terminal tailing the server logs.
+
+| Drill | Do this | You should see | Explains |
+|---|---|---|---|
+| Lost reply | Set the gateway delay to 3 s. Pay with `curl --max-time 1` and a fixed key; rerun the same command until it succeeds | A timeout, then `409` + `Retry-After`, then `201` with `Idempotent-Replayed: true`; one row in `payments` | A3.1, A3.8 |
+| Double click | Fire the same payment twice in parallel (two terminals, or `&`), first with one key, then with two keys | Same key: `201` + `409`. Different keys: `201` + `409 order-not-payable`. One charge either way | A3.9 |
+| Two editors | GET an order in two terminals, then PATCH from both with the same `If-Match` | One `200`, one `412`; the second must re-read and reapply | A4.1, A4.6 |
+| Database down | `docker compose stop` mid-run; send a payment; start it again; retry with the same key | A 5xx while it's down, then a normal `201` on retry: the key never got stored, so it isn't stuck. Check whether that 5xx is a problem body with a request id. The reference labs don't map unexpected exceptions yet, so adding that handler is part of the drill | A3.11, A2.7, A9.6 |
+| Paging under load | Page through orders with `limit=2` while a loop creates new orders; then repeat with `offset` | Cursor: no repeats. Offset: repeated orders | A5.2, A5.3 |
+| Rate limit fleet | Run two copies of the service on different ports behind nginx ([Part 9](/part-9-load-balancing/)) and hammer one key | Roughly twice the limit gets through: in-memory limits are per instance | A9.5 |
+| Proxy timeout | Put nginx in front with `proxy_read_timeout 1s` and a 3 s gateway delay | nginx returns `504` while the payment still completes; a retry with the key replays the `201` | A3.2, [3.4](/part-3-http11/#concept-3-4) |
+| Breaking change | Rename `customer` in your OpenAPI document and diff it against the previous version with a tool such as oasdiff | The tool flags a breaking change; plan how a v2 and a `Deprecation` header would roll it out | A6 |
+
+## Phase 4 — Explain it
+
+Write one page, then say it out loud, as if an interviewer asked “walk me through your API”:
+
+1. The resources and why they're shaped that way.
+2. The status codes and problem types, and how a client is meant to react to each.
+3. What a client should retry, and how the service makes that safe: keys, fingerprints, the atomic claim, passing the key to the gateway.
+4. How concurrent edits are handled, and why optimistic locking instead of locks.
+5. How pagination stays correct under writes, and what it doesn't guarantee.
+6. The limits, where they're enforced, and what changes with more than one instance.
+7. What you'd change for production: auth, a shared rate-limit store, key expiry, an outbox for events, observability.
+
+## You've got it when
+
+You can run every drill above, predict its outcome beforehand, and explain the result from first principles; the conformance suite passes against your own implementation; and you can talk through the design for half an hour, following the interviewer's “why?” three questions deep, without notes.

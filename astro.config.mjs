@@ -75,6 +75,7 @@ export default defineConfig({
             page('A7 — Long-running work and webhooks', 'apis/a7-async-webhooks'),
             page('A8 — API styles', 'apis/a8-api-styles'),
             page('A9 — The gateway and the edge', 'apis/a9-gateway-edge'),
+            page('A10 — Capstone', 'apis/a10-capstone'),
           ],
         },
         {

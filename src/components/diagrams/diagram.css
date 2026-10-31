@@ -2666,3 +2666,16 @@
   vertical-align: 0.15rem;
 }
 .rlc-how { margin-top: 0.9rem; }
+
+/* ---------- capstone pipeline (API track A10) ---------- */
+.cp-does {
+  margin-top: 0.15rem;
+  color: var(--dg-muted);
+}
+.df-q.is-answer .cp-does { color: var(--dg-text); }
+.dg .cp-headers {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 0.4rem 0.6rem;
+}
