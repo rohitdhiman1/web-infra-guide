@@ -1,0 +1,168 @@
+---
+title: "A2 — Errors and contracts"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Clients spend more code handling your errors than your successes. An error format that changes from endpoint to endpoint, or that only a human can read, pushes every client into string-matching and guesswork. This module standardises the error body and then writes the whole contract down, so clients can rely on it and tools can check it.
+
+**Concepts**
+
+- **<a id="concept-a2-1" class="concept-num" href="#concept-a2-1">A2.1</a> Errors are part of the contract.** Clients branch on errors: retry, ask the user to fix a field, refresh and try again, or give up. To do that they need three things that don't change: the status code (A1), a machine-readable error *type*, and a pointer to what was wrong. Human-readable text is for logs and people, never for `if` statements.
+- **<a id="concept-a2-2" class="concept-num" href="#concept-a2-2">A2.2</a> Problem details (RFC 9457).** The IETF standard error body, sent as `application/problem+json`. RFC 9457 (2023) replaced RFC 7807 with only small changes, so you'll hear both numbers. It defines five members: `type` (a URI identifying the kind of problem), `title` (a short summary that's the same for every occurrence of that type), `status` (the HTTP status, repeated for convenience), `detail` (what went wrong this time) and `instance` (which request or resource it happened on). You may add your own *extension members*.
+- **<a id="concept-a2-3" class="concept-num" href="#concept-a2-3">A2.3</a> The type is the identifier.** Clients switch on `type`, not on `title` or `detail`, which you can reword freely. Make it a stable absolute URI such as `https://api.example.com/problems/order-cancelled`, ideally one that serves a page explaining the problem. If a problem has no meaning beyond its status code, use `about:blank` (or leave `type` out, which means the same) and set `title` to the standard reason phrase.
+- **<a id="concept-a2-4" class="concept-num" href="#concept-a2-4">A2.4</a> Report every invalid field at once.** Nobody enjoys fixing one field per round trip. RFC 9457 suggests an `errors` extension: one entry per problem, each with a `detail` and a `pointer`, a JSON Pointer (RFC 6901) into the request body, written as a URI fragment like `#/items/0/quantity`. A form can put each message under the right input.
+- **<a id="concept-a2-5" class="concept-num" href="#concept-a2-5">A2.5</a> Layers of validation.** Check in order, and each layer gets its own code: does the body parse (400), does it have the right shape and values (422), is the request allowed in the resource's current state (409). A client can then tell a bug in its serializer from a user typing a bad value from a race with another user.
+- **<a id="concept-a2-6" class="concept-num" href="#concept-a2-6">A2.6</a> Don't leak internals.** Stack traces, SQL errors, class names and file paths in error bodies help attackers map your system and teach clients to depend on accidents. Log them with the request id (module A9) and send the client a type and a clear detail. Framework defaults can leak too: Spring's 404 for an unknown path says `No static resource nope.`, which reveals that a static-file handler sits behind the API.
+- **<a id="concept-a2-7" class="concept-num" href="#concept-a2-7">A2.7</a> One format for every error.** It's easy to format your own errors and forget the framework's: 404 for an unknown path, 405, 406, 415, a body that won't parse. Clients see all of them. Both labs route the framework's errors through the same problem-details code, headers (`Allow`, `Accept-Patch`) included.
+- **<a id="concept-a2-8" class="concept-num" href="#concept-a2-8">A2.8</a> OpenAPI describes the contract.** An OpenAPI 3.x document lists every path, method, parameter, request and response schema, status code and header, in YAML or JSON. Tools read it to render documentation, generate client libraries and server stubs, run mock servers, and check that real responses match.
+- **<a id="concept-a2-9" class="concept-num" href="#concept-a2-9">A2.9</a> Code-first or design-first.** *Code-first*: write the code and generate the OpenAPI document from it (FastAPI, springdoc). It's fast and always in sync with the code, but the design happens inside the implementation. *Design-first*: write and review the OpenAPI document before any code, the way you'd review an RFC, then generate stubs and test the code against the document. It's slower to start, but the contract gets reviewed by the people who'll consume it. Teams with many consumers tend to go design-first. Either way, keep the document in the repository and review changes to it like code.
+- **<a id="concept-a2-10" class="concept-num" href="#concept-a2-10">A2.10</a> Document the errors too.** A generated document is only as truthful as what the code declares. FastAPI documents a 422 automatically, with *its own* default error schema, which stops being true once you switch to problem details. Spring documents a create endpoint as `200` unless told it returns 201. Declare the real status codes and the `application/problem+json` schema, or the contract quietly lies.
+- **<a id="concept-a2-11" class="concept-num" href="#concept-a2-11">A2.11</a> Contract tests.** A contract test sends real requests and checks each response against the contract: status, headers and body schema. The spec tables in this track are contract tests in prose. Tools such as Schemathesis can generate thousands of such requests straight from an OpenAPI document and report every response that breaks it.
+
+## What a problem looks like
+
+A validation failure from the lab (both languages produce the same document):
+
+```http
+HTTP/1.1 422
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.example.com/problems/validation-error",
+  "title": "Your request is not valid",
+  "status": 422,
+  "detail": "validation failed",
+  "instance": "/orders",
+  "errors": [
+    { "pointer": "#/items/0/quantity", "detail": "must be at least 1" }
+  ]
+}
+```
+
+And a framework error with no extra meaning. Spring leaves `type` out, which means `about:blank`:
+
+```http
+HTTP/1.1 405
+Allow: GET, POST
+Content-Type: application/problem+json
+
+{ "title": "Method Not Allowed", "status": 405,
+  "detail": "Method 'DELETE' is not supported.", "instance": "/orders" }
+```
+
+## Lab A2 — problem details and an OpenAPI contract
+
+Start from A1. Keep every A1 behaviour, and change every error body to problem details.
+
+**Spec.** All of A1's rows still pass, with these changes and additions:
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | Any request that fails | `Content-Type: application/problem+json` with `title`, `status` and `instance` (the request path); `type` is present unless it's `about:blank` |
+| 2 | `POST /orders` with `"quantity": 0` | `422`, type `…/problems/validation-error`, `errors` containing `{"pointer": "#/items/0/quantity", …}` |
+| 3 | `POST /orders` with an empty customer, bad currency, no items | `422` with pointers `#/customer`, `#/currency` and `#/items` |
+| 4 | `GET /orders/ord_999999` | `404` problem, type `…/problems/order-not-found` |
+| 5 | `GET /nope` (no such route) | `404` problem, not the framework's default page |
+| 6 | `DELETE /orders` | `405` problem, still with `Allow` |
+| 7 | `PATCH` with `Content-Type: application/json` | `415` problem, still with `Accept-Patch` |
+| 8 | `POST /orders` with broken JSON | `400` problem, type `…/problems/malformed-body` |
+| 9 | Changing a cancelled order | `409` problem, type `…/problems/order-cancelled` |
+| 10 | `GET` the OpenAPI document (`/v3/api-docs` in Spring, `/openapi.json` in FastAPI) | `200`; `POST /orders` lists `201` and `422`, and the 422 is `application/problem+json` |
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+Spring has a `ProblemDetail` class. Extending `ResponseEntityExceptionHandler` makes Spring's own errors use it too, and keeps their headers:
+
+```java
+@RestControllerAdvice
+public class ApiErrors extends ResponseEntityExceptionHandler {
+  static final String TYPES = "https://api.example.com/problems/";
+
+  @ExceptionHandler(ApiException.class)
+  ResponseEntity<ProblemDetail> api(ApiException e, WebRequest request) {
+    ProblemDetail p = ProblemDetail.forStatusAndDetail(e.status, e.getMessage());
+    p.setType(URI.create(TYPES + e.type));
+    p.setTitle(TITLES.get(e.type));
+    p.setInstance(URI.create(path(request)));
+    if (!e.fields.isEmpty()) {
+      p.setProperty("errors", e.fields.entrySet().stream()
+          .map(f -> Map.of("pointer", f.getKey(), "detail", f.getValue())).toList());
+    }
+    return ResponseEntity.status(e.status).body(p);   // sent as application/problem+json
+  }
+
+  /** Spring's own errors (404, 405, 406, 415) arrive here as ProblemDetail already. */
+  @Override
+  protected ResponseEntity<Object> createResponseEntity(
+      Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+    if (body instanceof ProblemDetail p && p.getInstance() == null) p.setInstance(URI.create(path(request)));
+    return super.createResponseEntity(body, headers, status, request);
+  }
+}
+```
+
+For the contract, add `springdoc-openapi-starter-webmvc-api` and declare what the code can't reveal:
+
+```java
+@PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
+@ApiResponse(responseCode = "201", description = "Created; Location points at the new order")
+@ApiResponse(responseCode = "422", description = "Validation failed (application/problem+json)")
+public ResponseEntity<Order> create(@RequestBody OrderInput body) { ... }
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+One function builds every problem; the exception handlers for your errors, validation errors and Starlette's own errors all call it:
+
+```python
+def problem(request: Request, status: int, type_: str | None, detail: str,
+            fields: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> JSONResponse:
+    body = {
+        "type": TYPES + type_ if type_ else "about:blank",
+        "title": TITLES.get(type_ or "", HTTPStatus(status).phrase),
+        "status": status,
+        "detail": detail,
+        "instance": request.url.path,
+    }
+    if fields:
+        body["errors"] = [{"pointer": k, "detail": v} for k, v in fields.items()]
+    return JSONResponse(body, status_code=status, headers=headers, media_type="application/problem+json")
+```
+
+FastAPI generates `/openapi.json` on its own. Replace its default 422 schema with the real one:
+
+```python
+def problems_doc(*codes: int) -> dict:
+    return {c: {"model": Problem, "content": {"application/problem+json": {}}} for c in codes}
+
+
+@app.post("/orders", status_code=201, response_model=Order, responses=problems_doc(400, 415, 422))
+def create_order(body: OrderInput, response: Response): ...
+```
+
+</TabItem>
+</Tabs>
+
+**Framework details worth knowing**
+
+- Spring sends `ProblemDetail` bodies as `application/problem+json` automatically, and omits `type` when it's `about:blank`.
+- Spring's default `detail` for an unknown path, `No static resource nope.`, leaks an implementation detail (A2.6). The lab leaves it so you can see it; a production API would override it.
+- In FastAPI, a HEAD route registered alongside GET with `api_route(methods=["GET", "HEAD"])` produces a duplicate OpenAPI operation id. The lab registers HEAD separately with `include_in_schema=False`.
+
+**Try it**
+
+```bash
+curl -s -X POST localhost:8080/orders -H 'Content-Type: application/json' \
+  -d '{"customer":"","currency":"euro","items":[]}' | jq
+curl -s localhost:8080/v3/api-docs | jq '.paths."/orders".post.responses | keys'     # Spring
+curl -s localhost:8000/openapi.json | jq '.paths."/orders".post.responses | keys'     # FastAPI
+```
+
+## You've got it when
+
+You can write a problem details response from memory, explain what each member is for and which one clients should branch on, and argue for code-first or design-first for a given team, including what goes wrong with each.

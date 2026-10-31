@@ -1,0 +1,226 @@
+---
+title: "A3 — Reliability: timeouts, retries, idempotency"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import IdempotencyKeyFlow from '../../../components/diagrams/IdempotencyKeyFlow.tsx';
+import RetryStorm from '../../../components/diagrams/RetryStorm.tsx';
+
+Networks drop packets, servers restart, and dependencies slow down. A call over a network can succeed, fail, or end with **no answer at all**, and that third outcome is where most distributed-systems bugs live. This module covers how clients wait (timeouts), how they try again (retries with backoff), and how servers make trying again safe (idempotency keys). It's where the orders API gets a real database and starts taking payments.
+
+**Concepts**
+
+- **<a id="concept-a3-1" class="concept-num" href="#concept-a3-1">A3.1</a> Three outcomes, not two.** A remote call either succeeded, failed, or you don't know. A timeout, a reset connection or a crashed proxy all mean *you don't know*: the server may have done the work and lost the reply. Every reliability technique in this module exists to make “don't know” safe to resolve by asking again.
+- **<a id="concept-a3-2" class="concept-num" href="#concept-a3-2">A3.2</a> Timeouts on every call.** Most HTTP clients wait forever by default, and one hung dependency then holds a thread, a connection and a user hostage. Set a *connect* timeout (short: a TCP handshake takes milliseconds, see [1.4](/part-1-networking/#concept-1-4)), a *response* timeout per attempt, and ideally an overall *deadline* for the whole operation including retries. Each layer's timeout should be shorter than the one in front of it. If nginx gives up at 60 s ([Part 8](/part-8-reverse-proxy/)) but your app waits 90 s on the database, the app keeps working on a request whose user has already got a 504.
+- **<a id="concept-a3-3" class="concept-num" href="#concept-a3-3">A3.3</a> What's safe to retry.** Retry only when both hold. First, **the request is safe to repeat**: an idempotent method (A1.1), or a POST carrying an idempotency key. Second, **the failure might be temporary**: a connection error, a timeout, `408`, `429`, `502`, `503`, `504`, or a `409` that came with `Retry-After`. Never retry other 4xx responses; the same request will fail the same way.
+- **<a id="concept-a3-4" class="concept-num" href="#concept-a3-4">A3.4</a> Exponential backoff with jitter.** Wait longer after each failure (100 ms, 200 ms, 400 ms… up to a cap) so a struggling server gets room to recover, and **randomise** each wait. Without randomness, clients that failed together retry together, in synchronised waves that knock the server over again as it comes back. *Full jitter*, waiting a random time between 0 and the exponential ceiling, is the common choice. Marc Brooker's 2015 AWS article “Exponential Backoff and Jitter” is the classic write-up. Always cap the number of attempts too.
+- **<a id="concept-a3-5" class="concept-num" href="#concept-a3-5">A3.5</a> Listen to Retry-After.** When a server sends `Retry-After` (seconds, or an HTTP date) with a 429, 503 or 409, it knows better than your backoff formula. Use its value.
+- **<a id="concept-a3-6" class="concept-num" href="#concept-a3-6">A3.6</a> Retries multiply.** If the browser, the gateway and the service each retry 3 times, one user click can become 3 × 3 × 3 = 27 requests to the database during an incident. Retry at **one** layer, usually the one closest to the caller that can tell whether the request is safe. Cap the total with a *retry budget*, for example retries may add at most 10% to normal traffic.
+- **<a id="concept-a3-7" class="concept-num" href="#concept-a3-7">A3.7</a> Idempotency keys.** POST isn't idempotent, but a client can make one operation retry-safe: generate a unique key (a UUID) for each *logical* operation, such as “pay for order 1”, and send it as `Idempotency-Key` on every attempt. The server stores the key with the outcome. Stripe made the pattern popular, and the IETF is standardising the header (the *Idempotency-Key HTTP Header Field* draft, still a draft at the time of writing).
+- **<a id="concept-a3-8" class="concept-num" href="#concept-a3-8">A3.8</a> Key rules.** Same key and same request: return the **stored response**, ideally marked with a header like `Idempotent-Replayed: true`. Same key, *different* request: `422`, because the client has a bug. Same key while the first request is still running: `409` with `Retry-After`. Two more rules: **fingerprint** the request (method, path, body) to detect reuse, and **scope** keys to the caller and **expire** them (Stripe keeps them for 24 hours).
+- **<a id="concept-a3-9" class="concept-num" href="#concept-a3-9">A3.9</a> Make the check atomic.** “Look up the key; if it's missing, insert it” is a race: two concurrent retries both see nothing and both charge the card. Insert first and let a unique constraint pick the winner (`INSERT … ON CONFLICT DO NOTHING`). The same trick protects the order itself: `UPDATE orders SET status = 'paying' WHERE id = ? AND status = 'pending'` lets exactly one request claim the order, even across different keys.
+- **<a id="concept-a3-10" class="concept-num" href="#concept-a3-10">A3.10</a> Idempotency all the way down.** If your server charges the card, then crashes before saving the result, a retry would charge again. Real payment processors accept their own idempotency key, so pass yours down. Every hop that has side effects needs its own protection.
+- **<a id="concept-a3-11" class="concept-num" href="#concept-a3-11">A3.11</a> What to store when things fail.** The lab stores the response only for successes. If the work fails before anything changed (bad amount, gateway error), it deletes the key so the client can retry with the same key. Some APIs also store and replay failures. The rule that matters: never store an outcome you can't stand behind, and never forget a key whose side effect already happened.
+- **<a id="concept-a3-12" class="concept-num" href="#concept-a3-12">A3.12</a> “Exactly once” is at-least-once plus idempotency.** No network protocol can deliver a message exactly once, because the sender can't distinguish a lost request from a lost reply. Systems that advertise exactly-once (Kafka's transactions among them) build it from **at-least-once delivery** (retry until acknowledged) plus **idempotent processing** (duplicates have no extra effect). Say it this way in an interview and you'll rarely be pushed further.
+
+## Watch a retried payment
+
+The client times out after 2 seconds, and the gateway takes 3. Step through it without a key, then with one.
+
+<IdempotencyKeyFlow client:visible />
+
+## Why jitter matters
+
+A service takes 7 new requests per tick (100 ms) and can answer 10. For one second it answers nothing. Pick a retry strategy and watch what the retries do to the load. Red is requests that failed and will retry or give up.
+
+<RetryStorm client:visible />
+
+The model is deliberately simple: the server's capacity stays fixed under overload. Real servers usually get *slower* when overloaded (queues, garbage collection, thrashing), which makes synchronised waves even more damaging than shown here.
+
+## Lab A3 — payments that are safe to retry
+
+From here on the lab uses Postgres. It runs locally from a `compose.yaml` with throwaway credentials:
+
+```yaml
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_DB: orders, POSTGRES_USER: lab, POSTGRES_PASSWORD: lab }
+    ports: ["55432:5432"]
+```
+
+To stay focused, this lab keeps only `POST /orders` and `GET /orders/{id}` from earlier modules (A1 covers the rest) and keeps A2's problem details. A fake card gateway with a configurable delay stands in for a real processor and counts its charges.
+
+**Spec**
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `POST /orders/ord_1/payments` without `Idempotency-Key` | `400`, type `…/idempotency-key-missing` |
+| 2 | Same, with a new key and `{"amount": 3000}` | `201`, `Location: /orders/ord_1/payments/pay_N`; the order's status becomes `paid` |
+| 3 | Repeat request 2 exactly | `201` with the **identical body**, `Idempotent-Replayed: true`, still 1 charge, 1 payment row |
+| 4 | Same key, `{"amount": 2999}` | `422`, type `…/idempotency-key-reused` |
+| 5 | New key, wrong amount → then the same key with the right amount | `422`, then `201` (a failed request frees its key) |
+| 6 | A second payment for a paid order, new key | `409`, type `…/order-already-paid`, still 1 charge |
+| 7 | Gateway takes 700 ms; client times out at 200 ms; immediate retry; retry after 1 s | Timeout, then `409` with `Retry-After: 1`, then `201` replayed. 1 charge |
+| 8 | The retrying client (6 attempts, 300 ms timeout each) against the slow gateway | Ends with `201` after more than one attempt; 1 charge |
+| 9 | Two concurrent requests with the same key | One `201`, one `409`; 1 charge |
+| 10 | Two concurrent requests with different keys | One `201`, one `409` (`order-already-paid`); 1 charge |
+
+**The idempotency store.** The table's primary key makes “first request wins” atomic:
+
+```sql
+CREATE TABLE idempotency_keys (
+  key             TEXT PRIMARY KEY,
+  fingerprint     TEXT NOT NULL,          -- hash of method + path + body
+  state           TEXT NOT NULL,          -- in_progress | completed
+  response_status INT,
+  response_body   TEXT,
+  location        TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+/** Returns null if this request is the first with the key (so the caller should do the work). */
+public Stored begin(String key, String fingerprint) {
+  int inserted = db.sql("""
+          INSERT INTO idempotency_keys (key, fingerprint, state) VALUES (?, ?, 'in_progress')
+          ON CONFLICT (key) DO NOTHING""")
+      .params(key, fingerprint).update();
+  if (inserted == 1) return null;
+
+  var row = /* SELECT fingerprint, state, response_status, response_body, location ... */;
+  if (!row.fingerprint().equals(fingerprint)) {
+    throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT, "idempotency-key-reused", "...");
+  }
+  if (row.state().equals("in_progress")) {
+    throw new ApiException(HttpStatus.CONFLICT, "idempotency-key-in-progress", "...",
+        Map.of(), Map.of("Retry-After", "1"));
+  }
+  return row.stored();   // replay this
+}
+```
+
+The handler: fingerprint, `begin`, do the work, then `complete` or `abandon`:
+
+```java
+String fingerprint = sha256(request.getMethod() + " " + request.getRequestURI() + "\n" + raw);
+IdempotencyKeys.Stored stored = keys.begin(key, fingerprint);
+if (stored != null) {
+  return ResponseEntity.status(stored.status()).header("Location", stored.location())
+      .header("Idempotent-Replayed", "true").contentType(MediaType.APPLICATION_JSON).body(stored.body());
+}
+try {
+  Payment payment = charge(id, raw, key);          // claims the order, calls the gateway with our key
+  String body = json.writeValueAsString(payment);
+  keys.complete(key, 201, body, location);
+  return ResponseEntity.status(HttpStatus.CREATED).header("Location", location).body(body);
+} catch (RuntimeException e) {
+  keys.abandon(key);                               // nothing happened: free the key
+  throw e;
+}
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+def begin(key: str, fingerprint: str) -> Stored | None:
+    """Returns None if this request is the first with the key (so the caller should do the work)."""
+    with pool.connection() as conn:
+        inserted = conn.execute(
+            "INSERT INTO idempotency_keys (key, fingerprint, state) VALUES (%s, %s, 'in_progress') "
+            "ON CONFLICT (key) DO NOTHING", (key, fingerprint)).rowcount
+        if inserted == 1:
+            return None
+        row = conn.execute("SELECT * FROM idempotency_keys WHERE key = %s", (key,)).fetchone()
+    if row["fingerprint"] != fingerprint:
+        raise ApiError(422, "idempotency-key-reused", "...")
+    if row["state"] == "in_progress":
+        raise ApiError(409, "idempotency-key-in-progress", "...", headers={"Retry-After": "1"})
+    return Stored(row["response_status"], row["response_body"], row["location"])
+```
+
+The handler is `async` because it reads the raw body for the fingerprint, so every **blocking** call (Postgres, the slow gateway) goes to the thread pool. Calling them directly would freeze the event loop: the second request in test 9 would wait behind the first instead of getting its 409. This is the same lesson as the event-loop server in [Part 4](/part-4-raw-servers/).
+
+```python
+stored = await run_in_threadpool(idempotency.begin, key, fingerprint)
+if stored is not None:
+    return Response(stored.body, status_code=stored.status, media_type="application/json",
+                    headers={"Location": stored.location, "Idempotent-Replayed": "true"})
+try:
+    payment = await run_in_threadpool(charge, public_id, raw, key)
+    ...
+    await run_in_threadpool(idempotency.complete, key, 201, body, location)
+except Exception:
+    await run_in_threadpool(idempotency.abandon, key)
+    raise
+```
+
+</TabItem>
+</Tabs>
+
+**The retrying client.** The other half of the deal: it retries only safe requests and only temporary failures, honours `Retry-After`, and otherwise backs off with full jitter.
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+static boolean safeToRetry(HttpRequest r) {
+  return IDEMPOTENT.contains(r.method()) || r.headers().firstValue("Idempotency-Key").isPresent();
+}
+
+static boolean retryableStatus(HttpResponse<?> r) {
+  return RETRYABLE.contains(r.statusCode())                       // 408, 429, 502, 503, 504
+      || (r.statusCode() == 409 && r.headers().firstValue("Retry-After").isPresent());
+}
+
+Duration backoff(int attempt, String retryAfter) {
+  if (retryAfter != null && retryAfter.matches("\\d+")) return Duration.ofSeconds(Long.parseLong(retryAfter));
+  long ceiling = Math.min(policy.cap().toMillis(), policy.base().toMillis() << (attempt - 1));
+  return Duration.ofMillis(random.nextLong(ceiling + 1));         // full jitter: 0..ceiling
+}
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+def safe_to_retry(request: httpx2.Request) -> bool:
+    return request.method in IDEMPOTENT or "idempotency-key" in request.headers
+
+
+def retryable_status(response: httpx2.Response) -> bool:
+    return response.status_code in RETRYABLE or (response.status_code == 409 and "retry-after" in response.headers)
+
+
+def backoff(self, attempt: int, retry_after: str | None) -> float:
+    if retry_after and retry_after.isdigit():
+        return float(retry_after)
+    return self.rng.uniform(0, min(self.policy.cap, self.policy.base * 2 ** (attempt - 1)))   # full jitter
+```
+
+</TabItem>
+</Tabs>
+
+**Try it**
+
+```bash
+docker compose up -d
+curl -s -X POST localhost:8080/orders -H 'Content-Type: application/json' \
+  -d '{"customer":"ada@example.com","currency":"EUR","items":[{"sku":"BOOK-42","quantity":2,"unitPrice":1500}]}'
+KEY=$(uuidgen)
+curl -i -X POST localhost:8080/orders/ord_1/payments -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $KEY" -d '{"amount": 3000}'
+# the same command again: same body, plus Idempotent-Replayed: true
+curl -s localhost:8080/orders/ord_1/payments | jq '.data | length'     # 1
+```
+
+## You've got it when
+
+You can explain why a timeout means “don't know”, list which requests and which failures are safe to retry, sketch exponential backoff with full jitter and say why the jitter matters, and design an idempotency-key store from scratch. That includes the race it has to survive, what happens to the key when the work fails, and why the key must also reach the payment processor.

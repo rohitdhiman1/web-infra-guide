@@ -67,6 +67,8 @@ export default defineConfig({
             page('Overview', 'apis'),
             page('A0 — Foundations', 'apis/a0-foundations'),
             page('A1 — HTTP semantics', 'apis/a1-http-semantics'),
+            page('A2 — Errors and contracts', 'apis/a2-errors-contracts'),
+            page('A3 — Reliability', 'apis/a3-reliability'),
           ],
         },
         {

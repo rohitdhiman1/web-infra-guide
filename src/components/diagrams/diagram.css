@@ -2494,3 +2494,31 @@
   margin-top: 0.5rem;
   line-height: 1.5;
 }
+
+/* ---------- retry storm (API track A3) ---------- */
+.rs-outage { fill: var(--dg-bad-soft); }
+.rs-ok { fill: var(--dg-ok); }
+.rs-fail { fill: var(--dg-bad); }
+.rs-cap { stroke: var(--dg-text); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.rs-grid { stroke: var(--dg-border); stroke-width: 1; }
+.dg-svg text.rs-axis { fill: var(--dg-muted); font-size: 10px; }
+.dg-svg text.rs-note { fill: var(--dg-muted); font-size: 11px; font-weight: 600; }
+.rs-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.5rem;
+  color: var(--dg-muted);
+  font-size: var(--sl-text-xs);
+}
+.rs-key::before {
+  content: '';
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-right: 0.35rem;
+  border-radius: 2px;
+  vertical-align: -0.05rem;
+}
+.rs-key.ok::before { background: var(--dg-ok); }
+.rs-key.fail::before { background: var(--dg-bad); }
