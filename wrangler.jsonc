@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "web-infra-guide",
+  "compatibility_date": "2026-10-01",
+  // Static-only Worker: everything is served from the Astro build output.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page"
+  }
+}

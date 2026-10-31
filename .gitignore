@@ -1,45 +1,26 @@
-#--------------------------#
-# Magento Default Files    #
-#--------------------------#
+# build output
+dist/
+.astro/
 
-/PATCH_*.sh
+# dependencies
+node_modules/
 
-/app/etc/local.xml
+# logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-/media/*
-!/media/.htaccess
+# environment / secrets
+.env
+.env.*
+!.env.example
+.dev.vars*
 
-!/media/customer
-/media/customer/*
-!/media/customer/.htaccess
+# Cloudflare / wrangler
+.wrangler/
 
-!/media/dhl
-/media/dhl/*
-!/media/dhl/logo.jpg
-
-!/media/downloadable
-/media/downloadable/*
-!/media/downloadable/.htaccess
-
-!/media/xmlconnect
-/media/xmlconnect/*
-
-!/media/xmlconnect/custom
-/media/xmlconnect/custom/*
-!/media/xmlconnect/custom/ok.gif
-
-!/media/xmlconnect/original
-/media/xmlconnect/original/*
-!/media/xmlconnect/original/ok.gif
-
-!/media/xmlconnect/system
-/media/xmlconnect/system/*
-!/media/xmlconnect/system/ok.gif
-
-/var/*
-!/var/.htaccess
-
-!/var/package
-/var/package/*
-!/var/package/*.xml
-
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
