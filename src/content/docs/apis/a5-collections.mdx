@@ -1,0 +1,118 @@
+---
+title: "A5 — Collections: pagination, filtering, bulk"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import PaginationDrift from '../../../components/diagrams/PaginationDrift.tsx';
+
+`GET /orders` is easy with 10 orders and dangerous with 10 million: one request can exhaust memory, hold a database connection for seconds and send megabytes nobody reads. Every collection endpoint needs limits, a way to walk through pages that stays correct while data changes, and filters. This module also covers creating many things in one request.
+
+**Concepts**
+
+- **<a id="concept-a5-1" class="concept-num" href="#concept-a5-1">A5.1</a> Never return an unbounded list.** Give every collection a default page size and a maximum (the lab uses 20 and 100), and reject anything outside it with a 400. Without a cap, one careless client, or one curious attacker, can ask for everything.
+- **<a id="concept-a5-2" class="concept-num" href="#concept-a5-2">A5.2</a> Offset pagination.** `?limit=20&offset=40` means “skip 40 rows, return 20”. It's simple, and clients can jump straight to page 50. It has two problems. **Cost**: the database still reads and discards every skipped row, so deep pages get slower and slower. **Drift**: if rows are inserted or deleted while someone is paging, everything shifts, and the client sees a row twice or never sees one at all.
+- **<a id="concept-a5-3" class="concept-num" href="#concept-a5-3">A5.3</a> Cursor (keyset) pagination.** Instead of “skip N rows”, ask for “the next 20 after the last one I saw”: `WHERE id < :last_id ORDER BY id DESC LIMIT 21`. An index takes the query straight to the right place, so page 1,000 costs the same as page 1. Inserts and deletes elsewhere can't shift what comes next. The price: no jumping to page 50, only next (and previous, if you build it). Feeds, logs, exports and sync jobs are all cursor-shaped.
+- **<a id="concept-a5-4" class="concept-num" href="#concept-a5-4">A5.4</a> Cursors need a unique, stable order.** Keyset pagination only works if the sort order is total. Sorting by `created_at` alone breaks when two orders share a timestamp: some get skipped. Add a unique tie-breaker and compare both: `WHERE (created_at, id) < (:ts, :id) ORDER BY created_at DESC, id DESC`. The cursor then carries both values.
+- **<a id="concept-a5-5" class="concept-num" href="#concept-a5-5">A5.5</a> Opaque cursors and next links.** Encode the cursor (the lab uses base64 of the last id) and tell clients not to build or parse it, so you can change what's inside later. Better still, give them the whole next URL, in the body (`"next": "/orders?limit=20&cursor=aWQ6MTU"`) and in a `Link: <…>; rel="next"` header (RFC 8288). Clients that follow links never need to know how pagination works. No next link means this is the last page.
+- **<a id="concept-a5-6" class="concept-num" href="#concept-a5-6">A5.6</a> Detecting the last page cheaply.** Fetch one row more than the page size. If it comes back there's a next page; drop it and emit the link. That avoids a separate `COUNT(*)`, which on a big table is often slower than the page itself. If clients need totals, make them optional or approximate.
+- **<a id="concept-a5-7" class="concept-num" href="#concept-a5-7">A5.7</a> Filtering and sorting.** Use plain query parameters with clear names: `?status=pending&createdAfter=2026-10-01T00:00:00Z&sort=-createdAt`. Validate them like a body: an unknown status or a malformed date is a 400, not an empty list that hides the client's bug. Keep filters in the next link, and treat a cursor as valid only with the filters it was created under.
+- **<a id="concept-a5-8" class="concept-num" href="#concept-a5-8">A5.8</a> What cursors don't promise.** A cursor walk never repeats or skips rows that already existed, but it isn't a snapshot. Rows inserted *behind* the cursor (newer ones, in a newest-first list) won't appear until the next walk from the top. For an exact point-in-time copy, use an export job or a database snapshot.
+- **<a id="concept-a5-9" class="concept-num" href="#concept-a5-9">A5.9</a> Bulk operations.** Creating 500 orders with 500 requests costs 500 round trips. A bulk endpoint (`POST /orders/batch` with an array) does it in one. Decide up front between two behaviours. **All-or-nothing**: one transaction, and any invalid item fails the request with a 422 listing the bad items. **Per-item results**: `200` with one result per item, each with its own status and errors. The second is friendlier but harder for clients. Cap the batch size, and give each item its own idempotency key or a client-supplied id so a retried batch doesn't duplicate anything (A3).
+
+## Watch offset pagination drift
+
+Read page 1, then add a new order or delete one the client has already seen, then read the next page. Switch to cursor and do the same.
+
+<PaginationDrift client:visible />
+
+## Lab A5 — a paginated, filterable collection
+
+Add `GET /orders` to the A4 lab: newest first, cursor pagination by default, offset available for comparison, and a status filter.
+
+**Spec** (5 orders exist, `ord_1` … `ord_5`)
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `GET /orders?limit=2` | `ord_5, ord_4`, a `next` link with a cursor, and the same URL in `Link: <…>; rel="next"` |
+| 2 | Follow `next`, twice | `ord_3, ord_2`, then `ord_1` with `"next": null` and no `Link` header |
+| 3 | Page 1 with a cursor, create `ord_6`, follow `next` | `ord_3, ord_2`: nothing repeated |
+| 4 | Page 1 with `offset=0`, create `ord_6`, follow `next` (`offset=2`) | `ord_4, ord_3`: `ord_4` again, the drift bug, kept on purpose |
+| 5 | `GET /orders?limit=1&status=pending` | `next` keeps `status=pending` |
+| 6 | `GET /orders?status=cancelled` | `{"data": [], "next": null}` |
+| 7 | `limit=0`, `limit=101`, `limit=ten`, `cursor=garbage`, cursor + offset together, `status=lost` | `400`, type `…/invalid-parameter` |
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+// Ask for one extra row: if it comes back, there's a next page.
+List<Order> rows = orders.pageAfter(cursor == null ? null : decode(cursor), status, size + 1);
+String next = rows.size() > size ? link(size, status, "cursor", encode(rows.get(size - 1))) : null;
+
+Map<String, Object> body = new LinkedHashMap<>();
+body.put("data", rows.subList(0, Math.min(size, rows.size())));
+body.put("next", next);
+var response = ResponseEntity.ok();
+if (next != null) response.header("Link", "<" + next + ">; rel=\"next\"");
+return response.body(body);
+```
+
+```java
+// Keyset query: the primary-key index jumps straight to the right place.
+db.sql("""
+    SELECT * FROM orders
+    WHERE (CAST(? AS BIGINT) IS NULL OR id < ?) AND (CAST(? AS TEXT) IS NULL OR status = ?)
+    ORDER BY id DESC LIMIT ?""")
+  .params(beforeId, beforeId, status, status, limit)
+
+/** Opaque to clients: base64url of the last id seen. */
+static String encode(Order last) {
+  String raw = "id:" + last.id().substring("ord_".length());
+  return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+}
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+@app.get("/orders")
+def list_orders(limit: str | None = None, cursor: str | None = None, offset: str | None = None,
+                status: str | None = None):
+    size = int_param("limit", limit, 20, 1, 100)          # 400 outside 1..100
+    ...
+    # Ask for one extra row: if it comes back, there's a next page.
+    rows = repository.page_after(decode_cursor(cursor) if cursor else None, status, size + 1)
+    next_link = link(size, status, "cursor", encode_cursor(rows[size - 1])) if len(rows) > size else None
+    body = {"data": [o.model_dump(by_alias=True, mode="json") for o in rows[:size]], "next": next_link}
+    headers = {"Link": f'<{next_link}>; rel="next"'} if next_link else {}
+    return JSONResponse(body, headers=headers)
+```
+
+```python
+def page_after(before_id: int | None, status: str | None, limit: int) -> list[Order]:
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM orders WHERE (%(b)s::bigint IS NULL OR id < %(b)s) "
+            "AND (%(s)s::text IS NULL OR status = %(s)s) ORDER BY id DESC LIMIT %(n)s",
+            {"b": before_id, "s": status, "n": limit}).fetchall()
+    return [_order(r) for r in rows]
+```
+
+</TabItem>
+</Tabs>
+
+**Try it**
+
+```bash
+for i in 1 2 3 4 5; do curl -s -X POST localhost:8080/orders -H 'Content-Type: application/json' \
+  -d '{"customer":"ada@example.com","currency":"EUR","items":[{"sku":"BOOK-42","quantity":1,"unitPrice":1500}]}' >/dev/null; done
+curl -si 'localhost:8080/orders?limit=2' | grep -i '^link'
+curl -s 'localhost:8080/orders?limit=2' | jq '{ids: [.data[].id], next}'
+```
+
+## You've got it when
+
+You can explain both failure modes of offset pagination (cost and drift) and how keyset pagination avoids them, write the keyset `WHERE` clause for a non-unique sort column, say what a cursor doesn't guarantee, and choose between all-or-nothing and per-item results for a bulk endpoint.

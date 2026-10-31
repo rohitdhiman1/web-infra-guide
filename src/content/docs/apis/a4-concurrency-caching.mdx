@@ -1,0 +1,136 @@
+---
+title: "A4 — Concurrency and caching"
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import LostUpdate from '../../../components/diagrams/LostUpdate.tsx';
+
+Two clients edit the same order and one change silently disappears. A client downloads the same unchanged order every few seconds. Both problems have the same fix: give every version of a resource a name, the **ETag**, and let clients make requests *conditional* on it. This module covers the conditional headers from RFC 9110 and the parts of HTTP caching ([3.11](/part-3-http11/#concept-3-11), RFC 9111) that matter for APIs.
+
+**Concepts**
+
+- **<a id="concept-a4-1" class="concept-num" href="#concept-a4-1">A4.1</a> The lost update.** Two clients read version 1, both change it, both write. The second write is based on stale data and overwrites the first, and both get 200. Nothing errors and nothing is logged; the data is just wrong. HTTP is stateless, so the server can't know what a client saw unless the client says so.
+- **<a id="concept-a4-2" class="concept-num" href="#concept-a4-2">A4.2</a> Pessimistic or optimistic.** *Pessimistic* concurrency locks the record while someone edits it. That doesn't fit HTTP: a user can open an edit form and walk away, holding the lock indefinitely. *Optimistic* concurrency lets everyone read freely and checks for conflicts at write time: “save only if it's still the version I read”. Conflicts are rare, so retrying the occasional one costs less than locking every time.
+- **<a id="concept-a4-3" class="concept-num" href="#concept-a4-3">A4.3</a> ETags.** An `ETag` header names the current version of a representation: `ETag: "7"`. It's opaque to clients; they store it and send it back, never parse it. Common ways to generate one are a version column bumped on every write (as in the lab) or a hash of the response body. A *strong* ETag (`"7"`) means byte-for-byte identical. A *weak* one (`W/"7"`) means semantically equivalent, such as the same data compressed differently. Writes require strong ETags.
+- **<a id="concept-a4-4" class="concept-num" href="#concept-a4-4">A4.4</a> If-Match makes writes conditional.** `PATCH` with `If-Match: "7"` means “apply this only if the current ETag is still "7"”. If it isn't, the server answers **412 Precondition Failed** and changes nothing. The client then re-reads and decides: reapply its change, merge, or ask the user. `If-Match: *` means “only if it exists at all”. Its opposite, `If-None-Match: *` on a PUT, means “only if it *doesn't* exist yet”, a safe create-only PUT.
+- **<a id="concept-a4-5" class="concept-num" href="#concept-a4-5">A4.5</a> 428 forces the habit.** A client that never sends `If-Match` can still overwrite blindly. **428 Precondition Required** (RFC 6585) lets the server insist: writes without a precondition are refused. Use it on resources where lost updates matter, which for orders is all of them.
+- **<a id="concept-a4-6" class="concept-num" href="#concept-a4-6">A4.6</a> The check must be atomic.** Comparing `If-Match` with the version you just read, then writing, is a race: another write can land in between. Do the comparison inside the write: `UPDATE orders SET …, version = version + 1 WHERE id = ? AND version = ?`. Zero rows updated means someone else won, so answer 412. The lab's concurrency test fires two writes at once and checks that exactly one wins.
+- **<a id="concept-a4-7" class="concept-num" href="#concept-a4-7">A4.7</a> Conditional GET and 304.** A client that already has version `"7"` sends `If-None-Match: "7"`. If nothing changed, the server answers **304 Not Modified** with no body, and the client reuses its copy. This saves bandwidth and parsing, not necessarily server work: the server still has to find the current ETag, so make that cheap. The older pair, `Last-Modified` and `If-Modified-Since`, only has one-second resolution; prefer ETags.
+- **<a id="concept-a4-8" class="concept-num" href="#concept-a4-8">A4.8</a> Cache-Control for APIs.** `no-store`: don't keep a copy at all (secrets, one-time data). `no-cache`: you may keep a copy, but must revalidate it before every use. Despite the name, it doesn't mean “don't cache”, and with ETags it turns into cheap 304s. `max-age=60`: fresh for 60 seconds, no need to ask. `private`: only the user's own client may store it; `public` lets shared caches and CDNs store it too. The lab sends `private, no-cache` for orders: personal data, always checked.
+- **<a id="concept-a4-9" class="concept-num" href="#concept-a4-9">A4.9</a> Shared caches and personal data.** A CDN or proxy that caches one customer's order and serves it to another is a data breach. By default a shared cache must not store a response to a request that carried `Authorization`, unless the response explicitly allows it with a directive such as `public` or `s-maxage`. Mark personal responses `private` anyway. Cache shared reference data, such as a product catalogue, with `public, max-age=…`.
+- **<a id="concept-a4-10" class="concept-num" href="#concept-a4-10">A4.10</a> Vary.** If a response depends on a request header, say so with `Vary`. A response that changes with `Accept` or `Accept-Language` must carry `Vary: Accept` or `Vary: Accept-Language`, or a cache will serve the JSON version to a client that asked for CSV. Caches use those headers as part of the cache key.
+
+## Watch an update get lost
+
+<LostUpdate client:visible />
+
+## Lab A4 — ETags and conditional requests
+
+This lab focuses on the order resource: create, read and PATCH (JSON Merge Patch, as in A1) with versions. Payments from A3 aren't part of it. Each lab from here on uses its own Postgres schema (`a4`, `a5`, …) in the same container, so their tables never clash.
+
+**Spec**
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `POST /orders` | `201` with `ETag: "1"` |
+| 2 | `GET /orders/ord_1` | `200`, `ETag: "1"`, `Cache-Control` containing `private` and `no-cache`; the body has no `version` field |
+| 3 | `GET` with `If-None-Match: "1"` | `304`, empty body, `ETag: "1"` |
+| 4 | `GET` with `If-None-Match: "0"` | `200` with the body |
+| 5 | `PATCH` without `If-Match` | `428`, type `…/precondition-required` |
+| 6 | `PATCH` with `If-Match: "1"` | `200`, `ETag: "2"` |
+| 7 | Alice PATCHes with `"1"`, then Bob PATCHes with `"1"` | Alice `200`; Bob `412`; the order keeps Alice's change |
+| 8 | Two PATCHes with `If-Match: "1"` sent at the same moment | Exactly one `200` and one `412`; the ETag ends at `"2"` |
+| 9 | `PATCH` with `If-Match: *` | `200` |
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+@GetMapping("/{id}")
+public ResponseEntity<Order> get(@PathVariable String id,
+                                 @RequestHeader(name = "If-None-Match", required = false) String ifNoneMatch) {
+  Order order = existing(id);
+  if (matches(ifNoneMatch, order.etag())) {
+    return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(order.etag()).cacheControl(REVALIDATE).build();
+  }
+  return ResponseEntity.ok().eTag(order.etag()).cacheControl(REVALIDATE).body(order);
+}
+
+@PatchMapping(path = "/{id}", consumes = "application/merge-patch+json")
+public ResponseEntity<Order> patch(@PathVariable String id,
+                                   @RequestHeader(name = "If-Match", required = false) String ifMatch,
+                                   @RequestBody String raw) {
+  Order current = existing(id);
+  if (ifMatch == null) throw new ApiException(HttpStatus.PRECONDITION_REQUIRED, "precondition-required", "...");
+  if (!matches(ifMatch, current.etag())) throw new ApiException(HttpStatus.PRECONDITION_FAILED, "precondition-failed", "...");
+  OrderInput merged = merge(current, raw);
+  // Re-check inside the UPDATE: another writer may have slipped in since we read `current`.
+  if (!orders.updateIfVersion(Ids.order(id), current.version(), merged)) {
+    throw new ApiException(HttpStatus.PRECONDITION_FAILED, "precondition-failed", "...");
+  }
+  Order updated = existing(id);
+  return ResponseEntity.ok().eTag(updated.etag()).cacheControl(REVALIDATE).body(updated);
+}
+```
+
+```java
+// OrderRepository: check and write in one statement
+db.sql("""
+    UPDATE orders SET customer = ?, currency = ?, items = ?::jsonb, total = ?, status = ?,
+                      version = version + 1
+    WHERE id = ? AND version = ?""")
+  .params(..., id, expectedVersion).update() == 1;
+```
+
+The version stays out of the body with `@JsonIgnore` on the record component; it only travels as the ETag.
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+@app.get("/orders/{public_id}", response_model=Order)
+def get_order(public_id: str, request: Request):
+    order = existing(public_id)
+    if matches(request.headers.get("if-none-match"), order.etag):
+        return Response(status_code=304, headers={"ETag": order.etag, "Cache-Control": "private, no-cache"})
+    return order_response(order)   # JSON body + ETag + Cache-Control
+
+
+def apply_patch(public_id: str, if_match: str | None, raw: bytes):
+    current = existing(public_id)
+    if if_match is None:
+        raise ApiError(428, "precondition-required", "...")
+    if not matches(if_match, current.etag):
+        raise ApiError(412, "precondition-failed", "...")
+    merged = ...   # merge patch + validate, as in A1
+    if not repository.update_if_version(order_id(public_id), current.version, merged):
+        raise ApiError(412, "precondition-failed", "...")
+    return order_response(existing(public_id))
+
+
+def matches(header: str | None, etag: str) -> bool:
+    """If-Match / If-None-Match: "*" or a comma-separated list of ETags."""
+    return header is not None and any(t.strip() in ("*", etag) for t in header.split(","))
+```
+
+The version is a Pydantic field with `exclude=True`, so it never appears in the JSON.
+
+</TabItem>
+</Tabs>
+
+**Try it**
+
+```bash
+curl -i localhost:8080/orders/ord_1                                  # note the ETag
+curl -i localhost:8080/orders/ord_1 -H 'If-None-Match: "1"'          # 304
+curl -i -X PATCH localhost:8080/orders/ord_1 -H 'Content-Type: application/merge-patch+json' \
+  -d '{"customer":"x@example.com"}'                                   # 428
+curl -i -X PATCH localhost:8080/orders/ord_1 -H 'Content-Type: application/merge-patch+json' \
+  -H 'If-Match: "1"' -d '{"customer":"x@example.com"}'               # 200, ETag "2"
+```
+
+## You've got it when
+
+You can explain the lost update problem with two concrete clients, show how `ETag` and `If-Match` prevent it and why the version check has to sit inside the `UPDATE`, choose between 412 and 428, and pick the right `Cache-Control` for personal data, for shared reference data and for secrets.
