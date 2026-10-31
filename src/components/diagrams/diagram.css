@@ -2612,3 +2612,57 @@
 .bc-item.is-wrong { border-color: var(--dg-warn); }
 .bc-change { font-weight: 600; }
 .bc-why { color: var(--dg-text); }
+
+/* ---------- API styles (API track A8) ---------- */
+.as {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.as-wire {
+  margin: 0;
+  min-height: 15rem;
+}
+.as-facts {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+.as-facts div {
+  display: grid;
+  gap: 0.05rem;
+}
+.as-facts dt {
+  color: var(--dg-muted);
+  font-size: var(--sl-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.as-facts dd {
+  margin: 0;
+}
+@media (max-width: 40rem) {
+  .as { grid-template-columns: 1fr; }
+  .as-wire { min-height: 0; }
+}
+
+/* ---------- rate limiter comparison (API track A9) ---------- */
+.rlc-sec { stroke: var(--dg-border); stroke-width: 1; stroke-dasharray: 3 3; }
+.dg-svg text.rlc-axis { fill: var(--dg-muted); font-size: 10px; }
+.dg-svg text.rlc-label { font-size: 12px; font-weight: 600; }
+.rlc-ok { fill: var(--dg-ok); }
+.rlc-no { fill: var(--dg-bad); }
+.rlc-delay { stroke: var(--dg-warn); stroke-width: 2.5; }
+.rlc-stat { display: inline; }
+.rlc-key-delay::before {
+  content: '';
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.2rem;
+  margin-right: 0.35rem;
+  background: var(--dg-warn);
+  vertical-align: 0.15rem;
+}
+.rlc-how { margin-top: 0.9rem; }

@@ -144,3 +144,22 @@ export function useInterval(fn: () => void, ms: number, running: boolean) {
 export function safeId(id: string) {
   return id.replace(/[^a-zA-Z0-9_-]/g, '');
 }
+
+/* ------------------------------------------------------------------ layout */
+
+/**
+ * Measures an element's width, so an SVG can be drawn at 1:1 scale instead of being shrunk
+ * (shrinking makes text unreadable on phones). Returns `fallback` until the first measurement.
+ */
+export function useMeasuredWidth<T extends HTMLElement>(fallback: number) {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setWidth(Math.max(280, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width] as const;
+}

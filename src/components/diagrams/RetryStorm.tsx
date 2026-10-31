@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import DiagramFrame from './DiagramFrame';
-import { ToggleGroup, useInterval } from './shared';
+import { ToggleGroup, useInterval, useMeasuredWidth } from './shared';
 
 type Strategy = 'immediate' | 'fixed' | 'exp' | 'jitter';
 
@@ -108,8 +108,9 @@ export default function RetryStorm() {
     playing,
   );
 
-  const W = 600;
-  const H = 210;
+  const [wrapRef, measured] = useMeasuredWidth<HTMLDivElement>(600);
+  const W = Math.min(760, measured);
+  const H = W < 420 ? 190 : 210;
   const padL = 30;
   const padB = 22;
   const maxY = 50;
@@ -165,6 +166,7 @@ export default function RetryStorm() {
         </>
       }
     >
+      <div ref={wrapRef}>
       <svg
         className="dg-svg rs"
         viewBox={`0 0 ${W} ${H}`}
@@ -203,6 +205,7 @@ export default function RetryStorm() {
           </text>
         ))}
       </svg>
+      </div>
       <div className="rs-legend" aria-hidden="true">
         <span className="rs-key ok">answered</span>
         <span className="rs-key fail">failed (will retry or give up)</span>
