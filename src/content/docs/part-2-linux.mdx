@@ -3,6 +3,10 @@ title: "Part 2 — The Linux layer"
 tableOfContents:
   maxHeadingLevel: 3
 ---
+import FdTable from '../../components/diagrams/FdTable';
+import IoModels from '../../components/diagrams/IoModels';
+import ZeroCopy from '../../components/diagrams/ZeroCopy';
+import EphemeralPorts from '../../components/diagrams/EphemeralPorts';
 import Checkpoint from '../../components/content/Checkpoint.astro';
 
 Web servers are Linux programs first. Knowing what the kernel does for them explains most nginx tuning advice. Plan about one week, overlapping with Part 4.
@@ -21,6 +25,8 @@ Every socket, file and pipe is an integer handle. A server holding 10,000 connec
 
 Per-process caps on open descriptors. "Too many open files" is a classic outage; nginx's `worker_rlimit_nofile` exists because of it.
 
+<FdTable client:visible />
+
 <span id="concept-2-3"></span>
 
 ### <span class="concept-badge">2.3</span> Blocking vs non-blocking I/O
@@ -32,6 +38,8 @@ A blocking `read` freezes the thread until data arrives. Non-blocking calls retu
 ### <span class="concept-badge">2.4</span> I/O multiplexing: select, poll, epoll
 
 Ask the kernel "which of these sockets is ready?" `select` and `poll` scan every descriptor; `epoll` reports only the ready ones and scales to huge counts. nginx is built on epoll.
+
+<IoModels client:visible />
 
 <span id="concept-2-5"></span>
 
@@ -51,11 +59,15 @@ How you talk to a running server: SIGHUP to reload config, SIGTERM to stop, SIGQ
 
 The kernel copies a file straight to a socket without passing through user space. It is why nginx serves static files so cheaply.
 
+<ZeroCopy client:visible />
+
 <span id="concept-2-8"></span>
 
 ### <span class="concept-badge">2.8</span> Kernel network tuning
 
 Know what `net.core.somaxconn` (backlog ceiling), `net.ipv4.ip_local_port_range` (ephemeral ports) and `tcp_tw_reuse` do. Don't tune blindly; measure first.
+
+<EphemeralPorts client:visible />
 
 <span id="concept-2-9"></span>
 
