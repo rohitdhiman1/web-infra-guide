@@ -2813,3 +2813,8 @@
   color: var(--dg-muted);
   font-size: var(--sl-text-xs);
 }
+.tl-wire {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
