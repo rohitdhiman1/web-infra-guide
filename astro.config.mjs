@@ -28,6 +28,8 @@ export default defineConfig({
           items: [
             page('Part 1 — Networking foundations', 'part-1-networking'),
             page('Part 2 — The Linux layer', 'part-2-linux'),
+            page('C1 — Containers from the kernel up', 'foundations/c1-containers'),
+            page('C2 — Container networking', 'foundations/c2-container-networking'),
             page('Part 3 — HTTP/1.1 in depth', 'part-3-http11'),
           ],
         },
