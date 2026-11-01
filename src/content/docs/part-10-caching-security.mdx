@@ -1,46 +1,135 @@
 ---
 title: "Part 10 — Caching, performance and security hardening"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import ProxyCache from '../../components/diagrams/ProxyCache';
 import RateLimiting from '../../components/diagrams/RateLimiting';
+import Checkpoint from '../../components/content/Checkpoint.astro';
 
 This is what separates "it works" from "it survives real traffic and real attackers." Plan two weeks.
+
+## Proxy cache simulator
 
 <ProxyCache client:visible />
 
 Try this order: send, send again, wait twice, take the backend down, send. You'll see all four cache statuses, and why `proxy_cache_use_stale` turns an outage into a non-event ([10.1](#concept-10-1) to [10.4](#concept-10-4)).
 
-**Caching**
+## Caching
 
-- **<a id="concept-10-1" class="concept-num" href="#concept-10-1">10.1</a> proxy\_cache basics.** `proxy_cache_path` defines disk storage and a shared-memory key zone. `proxy_cache_valid` sets lifetimes per status code. nginx respects the upstream's `Cache-Control` unless told otherwise.
-- **<a id="concept-10-2" class="concept-num" href="#concept-10-2">10.2</a> The cache key.** `proxy_cache_key` decides what counts as "the same response." Too broad leaks one user's page to another; too narrow means nothing ever hits.
-- **<a id="concept-10-3" class="concept-num" href="#concept-10-3">10.3</a> Cache status.** Expose `$upstream_cache_status` (HIT, MISS, EXPIRED, STALE, BYPASS) in a response header while learning.
-- **<a id="concept-10-4" class="concept-num" href="#concept-10-4">10.4</a> Stale content and stampede protection.** `proxy_cache_use_stale` serves old content when the backend errors or during updates. `proxy_cache_lock` lets only one request refill an expired entry.
-- **<a id="concept-10-5" class="concept-num" href="#concept-10-5">10.5</a> Microcaching.** Caching dynamic pages for just 1 to 5 seconds can cut backend load by orders of magnitude on busy endpoints.
-- **<a id="concept-10-6" class="concept-num" href="#concept-10-6">10.6</a> Never cache private responses.** Bypass the cache for logged-in users and anything with `Set-Cookie` or `Authorization`.
+<span id="concept-10-1"></span>
 
-**Performance**
+### <span class="concept-badge">10.1</span> proxy\_cache basics
 
-- **<a id="concept-10-7" class="concept-num" href="#concept-10-7">10.7</a> Static file tuning.** `sendfile on`, `tcp_nopush on`, `tcp_nodelay on`, and `open_file_cache` for hot files.
-- **<a id="concept-10-8" class="concept-num" href="#concept-10-8">10.8</a> Compression.** `gzip on` with sensible `gzip_types` and level 4 to 6. Pre-compressed files with `gzip_static`. Brotli via a third-party module.
-- **<a id="concept-10-9" class="concept-num" href="#concept-10-9">10.9</a> Keep-alive tuning.** `keepalive_timeout` and `keepalive_requests` on the client side, `keepalive` on the upstream side.
-- **<a id="concept-10-10" class="concept-num" href="#concept-10-10">10.10</a> Load testing properly.** Use `wrk` or `k6` from a separate machine. Watch latency percentiles (p50, p99), not just requests per second. Check CPU, memory and errors at the same time.
+`proxy_cache_path` defines disk storage and a shared-memory key zone. `proxy_cache_valid` sets lifetimes per status code. nginx respects the upstream's `Cache-Control` unless told otherwise.
 
-**Security**
+<span id="concept-10-2"></span>
 
-- **<a id="concept-10-11" class="concept-num" href="#concept-10-11">10.11</a> Rate limiting.** `limit_req_zone` uses a leaky-bucket algorithm per key (usually client IP). Learn `burst` and `nodelay`. `limit_conn` caps concurrent connections. Both return 503 by default; set `limit_req_status 429`.
-- **<a id="concept-10-12" class="concept-num" href="#concept-10-12">10.12</a> Access control.** `allow` and `deny` by IP, `auth_basic` for simple passwords, `auth_request` to delegate auth to a separate service.
-- **<a id="concept-10-13" class="concept-num" href="#concept-10-13">10.13</a> Security headers.** `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options` or CSP `frame-ancestors`, and `Referrer-Policy`. Remember the `add_header` inheritance trap ([7.4](/part-7-nginx-core/#concept-7-4)) and add `always` to cover error responses.
-- **<a id="concept-10-14" class="concept-num" href="#concept-10-14">10.14</a> Information hiding.** `server_tokens off;` hides the version. Return 444 (close with no response) from a default server that catches requests for unknown hostnames.
-- **<a id="concept-10-15" class="concept-num" href="#concept-10-15">10.15</a> Request size and timeout limits.** Tight `client_header_buffer_size`, `large_client_header_buffers` and timeouts defend against slow-client and oversized-request attacks.
-- **<a id="concept-10-16" class="concept-num" href="#concept-10-16">10.16</a> Request smuggling.** When a proxy and a backend disagree on where a request ends (`Content-Length` vs `Transfer-Encoding`), attackers can hide a second request. Keep nginx current and reject ambiguous requests.
-- **<a id="concept-10-17" class="concept-num" href="#concept-10-17">10.17</a> Least privilege.** Workers run as an unprivileged user. Keep private keys readable only by root. Patch nginx and OpenSSL promptly.
+### <span class="concept-badge">10.2</span> The cache key
+
+`proxy_cache_key` decides what counts as "the same response." Too broad leaks one user's page to another; too narrow means nothing ever hits.
+
+<span id="concept-10-3"></span>
+
+### <span class="concept-badge">10.3</span> Cache status
+
+Expose `$upstream_cache_status` (HIT, MISS, EXPIRED, STALE, BYPASS) in a response header while learning.
+
+<span id="concept-10-4"></span>
+
+### <span class="concept-badge">10.4</span> Stale content and stampede protection
+
+`proxy_cache_use_stale` serves old content when the backend errors or during updates. `proxy_cache_lock` lets only one request refill an expired entry.
+
+<span id="concept-10-5"></span>
+
+### <span class="concept-badge">10.5</span> Microcaching
+
+Caching dynamic pages for just 1 to 5 seconds can cut backend load by orders of magnitude on busy endpoints.
+
+<span id="concept-10-6"></span>
+
+### <span class="concept-badge">10.6</span> Never cache private responses
+
+Bypass the cache for logged-in users and anything with `Set-Cookie` or `Authorization`.
+
+## Performance
+
+<span id="concept-10-7"></span>
+
+### <span class="concept-badge">10.7</span> Static file tuning
+
+`sendfile on`, `tcp_nopush on`, `tcp_nodelay on`, and `open_file_cache` for hot files.
+
+<span id="concept-10-8"></span>
+
+### <span class="concept-badge">10.8</span> Compression
+
+`gzip on` with sensible `gzip_types` and level 4 to 6. Pre-compressed files with `gzip_static`. Brotli via a third-party module.
+
+<span id="concept-10-9"></span>
+
+### <span class="concept-badge">10.9</span> Keep-alive tuning
+
+`keepalive_timeout` and `keepalive_requests` on the client side, `keepalive` on the upstream side.
+
+<span id="concept-10-10"></span>
+
+### <span class="concept-badge">10.10</span> Load testing properly
+
+Use `wrk` or `k6` from a separate machine. Watch latency percentiles (p50, p99), not just requests per second. Check CPU, memory and errors at the same time.
+
+## Security
+
+<span id="concept-10-11"></span>
+
+### <span class="concept-badge">10.11</span> Rate limiting
+
+`limit_req_zone` uses a leaky-bucket algorithm per key (usually client IP). Learn `burst` and `nodelay`. `limit_conn` caps concurrent connections. Both return 503 by default; set `limit_req_status 429`.
+
+<span id="concept-10-12"></span>
+
+### <span class="concept-badge">10.12</span> Access control
+
+`allow` and `deny` by IP, `auth_basic` for simple passwords, `auth_request` to delegate auth to a separate service.
+
+<span id="concept-10-13"></span>
+
+### <span class="concept-badge">10.13</span> Security headers
+
+`Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options` or CSP `frame-ancestors`, and `Referrer-Policy`. Remember the `add_header` inheritance trap ([7.4](/part-7-nginx-core/#concept-7-4)) and add `always` to cover error responses.
+
+<span id="concept-10-14"></span>
+
+### <span class="concept-badge">10.14</span> Information hiding
+
+`server_tokens off;` hides the version. Return 444 (close with no response) from a default server that catches requests for unknown hostnames.
+
+<span id="concept-10-15"></span>
+
+### <span class="concept-badge">10.15</span> Request size and timeout limits
+
+Tight `client_header_buffer_size`, `large_client_header_buffers` and timeouts defend against slow-client and oversized-request attacks.
+
+<span id="concept-10-16"></span>
+
+### <span class="concept-badge">10.16</span> Request smuggling
+
+When a proxy and a backend disagree on where a request ends (`Content-Length` vs `Transfer-Encoding`), attackers can hide a second request. Keep nginx current and reject ambiguous requests.
+
+<span id="concept-10-17"></span>
+
+### <span class="concept-badge">10.17</span> Least privilege
+
+Workers run as an unprivileged user. Keep private keys readable only by root. Patch nginx and OpenSSL promptly.
+
+## Rate limiting simulator
 
 <RateLimiting client:visible />
 
 Play with it: fire a burst of 5 with `nodelay` off, then on. Off, spikes are smoothed but users wait. On, spikes are served instantly but the bucket refills only at the rate, so a second burst soon after is rejected. Most APIs want `burst` plus `nodelay`.
 
-**In the sandbox**
+## In the sandbox
 
 1. Put `proxy_cache` in front of a slow backend (1-second responses). Benchmark before and after, and watch the cache status header.
 2. Stop the backend and confirm `proxy_cache_use_stale` keeps the site up.
@@ -48,4 +137,10 @@ Play with it: fire a burst of 5 with `nodelay` off, then on. Off, spikes are smo
 4. Set a rate limit of 10 requests per second with `burst=20`. Hammer it with `wrk` and read the 429s in the logs.
 5. Scan your server with `testssl.sh` and an online security header checker, and fix what they flag.
 
-**You've got it when** you can triple a slow backend's capacity with caching alone, and explain exactly which requests are never cached and why.
+## You've got it when
+
+<Checkpoint title="">
+
+You can triple a slow backend's capacity with caching alone, and explain exactly which requests are never cached and why.
+
+</Checkpoint>
