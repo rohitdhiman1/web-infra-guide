@@ -1,9 +1,13 @@
 ---
 title: "Part 15 — Capstone: build it, break it, rebuild it"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
+import Checkpoint from '../../components/content/Checkpoint.astro';
+
 The capstone ties every part together into one production-shaped system, then proves it survives failure. Plan two 6-hour sandbox windows, fully scripted so the second one starts from Git.
 
-**What you build**
+## What you build
 
 1. Terraform or CLI scripts that create a VPC across two zones, an ALB, two nginx VMs and three app VMs running Django under Gunicorn (or Spring Boot on Tomcat).
 2. nginx doing path routing (`/api` vs `/static`), microcaching, rate limiting, JSON logs with timings, and security headers.
@@ -11,7 +15,7 @@ The capstone ties every part together into one production-shaped system, then pr
 4. Configs deployed through your CI pipeline from Part 14, never by hand.
 5. A dashboard with request rate, error rate and p99 latency (Part 12).
 
-**Failure drills**
+## Failure drills
 
 Run a steady `wrk` load during every drill. Before each one, write down what you expect to happen, then compare.
 
@@ -26,10 +30,16 @@ Run a steady `wrk` load during every drill. Before each one, write down what you
 | Expired inner certificate | Swap an expired cert onto nginx's re-encryption hop | The ALB's health checks fail; your expiry alarm fires first |
 | Canary release | Send 10% of traffic to a new app version via upstream weights | Errors stay at the canary; then shift to 100% |
 
-**Deliverables for your repo**
+## Deliverables for your repo
 
 - An architecture diagram of what you built.
 - A one-page runbook using the field guide's commands.
 - A short postmortem for the drill that surprised you most: what happened, how you found it, what you'd change.
 
-**You've got it when** the system survives every drill, and you can tear it down and rebuild it from Git alone in under 30 minutes.
+## You've got it when
+
+<Checkpoint title="">
+
+The system survives every drill, and you can tear it down and rebuild it from Git alone in under 30 minutes.
+
+</Checkpoint>
