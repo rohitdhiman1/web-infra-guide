@@ -1,0 +1,301 @@
+---
+title: "T1 — TLS in practice"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import CryptoPlayground from '../../../components/diagrams/CryptoPlayground.tsx';
+import HandshakeCompare from '../../../components/diagrams/HandshakeCompare.tsx';
+import CertFormats from '../../../components/diagrams/CertFormats.tsx';
+import TlsFailures from '../../../components/diagrams/TlsFailures.tsx';
+
+[Part 5](/part-5-tls/) explains how TLS works. This module is about living with it: telling encoding, hashing, encryption and signing apart; certificate files and Java keystores; TLS for Kafka; why handshakes fail; and running certificates in a company. It's the part of TLS that turns up in on-call shifts, and in interview follow-ups for anyone who has run mTLS or a broker cluster.
+
+## Encoding, hashing, encryption and signing
+
+These four get mixed up all the time, including in code reviews. They answer different questions:
+
+:::note[Definition]
+**Encoding** changes how data is represented so it can travel (Base64, hex, URL encoding). It needs no key and anyone can reverse it.
+
+**Hashing** turns data into a fixed-size fingerprint that can't be reversed (SHA-256).
+
+**Encryption** makes data unreadable to anyone without the key, and is reversible with the key (AES, ChaCha20).
+
+**Signing** proves who produced data and that it hasn't changed, using a private key that anyone can verify with the matching public key (ECDSA, RSA, Ed25519).
+:::
+
+| | Encoding | Hashing | MAC (keyed hash) | Encryption | Signing |
+|---|---|---|---|---|---|
+| Purpose | Represent data safely in text or URLs | Fingerprint data; detect any change | Prove integrity and that the sender holds a shared secret | Keep data secret | Prove who made it, and integrity |
+| Reversible? | Yes, by anyone | No | No | Yes, with the key | Not applicable: verified, not reversed |
+| Key | None | None | One shared secret | Shared secret (symmetric) or public/private pair | Private key signs, public key verifies |
+| Examples | Base64 in PEM files, JWT parts, `%20` in URLs | SHA-256 file checksums, Docker image digests, Git commits | HMAC-SHA256 in webhooks (A7), JWT HS256 | AES-GCM inside every TLS connection | Certificates, JWT RS256, signed commits |
+| Never use it for | Hiding anything | Passwords on its own (use bcrypt, scrypt or Argon2) | Proving anything to a third party, who would need the secret | Integrity, unless it's an AEAD mode like GCM | Secrecy: signed data is still readable |
+
+<CryptoPlayground client:visible />
+
+## Concepts
+
+<span id="concept-t1-1"></span>
+
+### <span class="concept-badge">T1.1</span> Encoding is not security
+
+Base64 makes binary data safe to put in text: in JSON, in an HTTP header, between the `-----BEGIN CERTIFICATE-----` lines of a PEM file. It hides nothing. A JWT's payload is base64url-encoded JSON that anyone can read by pasting it into a decoder (A10.5). Seeing “encrypted” in a ticket about a base64 string is a red flag.
+
+<Takeaway>
+Encoding is about representation, not secrecy: anyone can decode it.
+</Takeaway>
+
+<span id="concept-t1-2"></span>
+
+### <span class="concept-badge">T1.2</span> Hashing: fingerprints
+
+A cryptographic hash such as SHA-256 maps any input to 32 bytes. The same input always gives the same hash; any change gives a completely different one; and you can't work backwards or find two inputs with the same hash. That's why hashes identify content: certificate fingerprints, Docker image digests (`sha256:…`, C1.7), Git commits, download checksums.
+
+MD5 and SHA-1 are broken, because collisions can be manufactured; don't use them for security. And never store passwords as a fast hash: attackers can try billions of SHA-256 guesses per second. Password hashes such as bcrypt, scrypt and Argon2 are deliberately slow and salted.
+
+<Takeaway>
+A hash fingerprints data one way; use slow, salted password hashes for passwords.
+</Takeaway>
+
+<span id="concept-t1-3"></span>
+
+### <span class="concept-badge">T1.3</span> MACs: hashes with a secret
+
+A plain hash detects accidental change, but an attacker who changes the data simply recomputes the hash. A **MAC** (message authentication code), usually **HMAC-SHA256**, mixes a shared secret into the hash, so only someone holding the secret can produce a valid one. That's how webhook signatures (A7.5) and HS256 JWTs work. The limit: both sides hold the same secret, so a MAC can't prove to a third party *which* of them produced it.
+
+<Takeaway>
+A MAC proves integrity and that the sender holds a shared secret.
+</Takeaway>
+
+<span id="concept-t1-4"></span>
+
+### <span class="concept-badge">T1.4</span> Encryption: symmetric and asymmetric
+
+**Symmetric** encryption (AES-GCM, ChaCha20-Poly1305) uses one key for both directions. It's fast, and in its modern **AEAD** modes it also detects tampering. Its problem is getting the same key to both sides safely. **Asymmetric** cryptography uses a key pair: what one key does, only the other can undo. It's far slower, so in practice it's used to **agree on** or **protect** a symmetric key, not to encrypt the data itself.
+
+TLS does exactly that: an asymmetric key exchange (ECDHE) agrees on a key, and AES-GCM or ChaCha20 encrypts everything after it ([5.2](/part-5-tls/#concept-5-2)). [T0](/practice/t0-symmetric-asymmetric/) walks through both kinds visually.
+
+<Takeaway>
+Symmetric ciphers encrypt the data; asymmetric cryptography solves how the two sides get the key.
+</Takeaway>
+
+<span id="concept-t1-5"></span>
+
+### <span class="concept-badge">T1.5</span> Digital signatures
+
+A signature is computed with a **private** key and verified with the matching **public** key. A valid signature proves the data hasn't changed *and* that the private key's owner made it, and anyone can check that without being able to forge it. Certificates are signatures (a CA signing your public key and names), as are RS256 and ES256 JWTs, and signed container images and commits.
+
+Signing doesn't hide anything: signed data stays readable unless it's also encrypted.
+
+<Takeaway>
+A signature proves who made something and that it's unchanged, and anyone can verify it, but it hides nothing.
+</Takeaway>
+
+<span id="concept-t1-6"></span>
+
+### <span class="concept-badge">T1.6</span> TLS 1.2 vs TLS 1.3
+
+TLS 1.2 (2008) still carries plenty of traffic, and interviewers like comparing the two:
+
+| | TLS 1.2 | TLS 1.3 |
+|---|---|---|
+| Round trips before data | 2 | 1 (0 with resumption and 0-RTT) |
+| Key exchange | RSA *or* (EC)DHE | (EC)DHE only, so always forward secret |
+| Certificate | Sent in clear | Encrypted |
+| Cipher suites | Dozens, including weak ones (CBC, RC4, 3DES) | Five, all AEAD |
+| Renegotiation, compression | Supported (and attacked: CRIME, triple handshake) | Removed |
+
+<HandshakeCompare client:visible />
+
+<Takeaway>
+TLS 1.3 removes RSA key exchange and weak ciphers, encrypts the certificate, and saves a round trip.
+</Takeaway>
+
+<span id="concept-t1-7"></span>
+
+### <span class="concept-badge">T1.7</span> Certificate files and formats
+
+The same certificate and key can live in several file formats. Mixing them up causes a large share of TLS tickets:
+
+| Format | Contains | Typical extension |
+|---|---|---|
+| PEM | Base64 text between BEGIN/END lines; one or more certificates, or a key | `.pem`, `.crt`, `.cer`, `.key` |
+| DER | The same, as raw binary; one object per file | `.der`, `.cer` |
+| PKCS#12 | A private key plus its chain, password-protected | `.p12`, `.pfx` |
+| JKS | Java's legacy keystore | `.jks` |
+| CSR | A request for a CA to sign your public key and names | `.csr` |
+
+<CertFormats client:visible />
+
+<Takeaway>
+PEM and DER are the same data as text and binary; PKCS#12 bundles a key with its chain; JKS is legacy Java.
+</Takeaway>
+
+<span id="concept-t1-8"></span>
+
+### <span class="concept-badge">T1.8</span> Chain order, and matching the key
+
+A server sends its **leaf** certificate first, then each **intermediate** up the chain, and never the root, which clients already have. A `fullchain.pem` in the wrong order, or missing its intermediate, works in some clients and fails in others ([5.5](/part-5-tls/#concept-5-5)). nginx refuses to start if the key doesn't match the certificate, but other servers fail later and less clearly.
+
+To check, compare public keys: `openssl x509 -in cert.pem -noout -pubkey | sha256sum` and `openssl pkey -in key.pem -pubout | sha256sum` must print the same hash.
+
+<Takeaway>
+Send leaf then intermediates, no root, and check that the key's public key matches the certificate's.
+</Takeaway>
+
+<span id="concept-t1-9"></span>
+
+### <span class="concept-badge">T1.9</span> Keystores and truststores in Java
+
+Java splits TLS material into two stores, often confused with each other:
+
+| | Keystore | Truststore |
+|---|---|---|
+| Answers | “Who am I?” | “Whom do I trust?” |
+| Holds | My private key and certificate chain | CA certificates only, no private keys |
+| Needed by | Servers, and clients doing mTLS | Every client, and mTLS servers checking clients |
+| Default | None | The JDK's `cacerts` (public CAs) |
+| System properties | `javax.net.ssl.keyStore`, `…keyStorePassword` | `javax.net.ssl.trustStore`, `…trustStorePassword` |
+
+PKCS#12 has been Java's default keystore type since Java 9; JKS is legacy. `keytool` manages both: `keytool -list -v -keystore truststore.p12` shows what's inside, and `keytool -importcert -alias corp-root -file root.pem -keystore truststore.p12` adds a CA.
+
+Setting `javax.net.ssl.trustStore` *replaces* the default `cacerts` rather than adding to it, so public CAs stop being trusted unless you include them. In Spring Boot, **SSL bundles** name a set of stores once and reuse it: `spring.ssl.bundle.pem.server.keystore.certificate=…` or `spring.ssl.bundle.jks.client.truststore.location=…`, then `server.ssl.bundle=server`.
+
+<Takeaway>
+The keystore holds your identity and the truststore holds the CAs you trust; a custom truststore replaces cacerts.
+</Takeaway>
+
+<span id="concept-t1-10"></span>
+
+### <span class="concept-badge">T1.10</span> TLS and mTLS for Kafka
+
+Kafka uses the same Java stores, configured per listener:
+
+| Setting | Meaning |
+|---|---|
+| `listeners=SSL://:9093` or `SASL_SSL://:9094` | Encrypted listeners. With `SASL_SSL`, TLS encrypts and SASL (such as SCRAM or OAUTHBEARER) authenticates |
+| `ssl.keystore.location`, `ssl.keystore.type=PKCS12` | The broker's (or client's) own key and certificate |
+| `ssl.truststore.location` | The CAs whose certificates it accepts |
+| `ssl.client.auth=required` | mTLS: clients must present a certificate, and its subject becomes the Kafka principal for ACLs |
+| `ssl.endpoint.identification.algorithm=https` | Hostname verification, on by default since Kafka 2.0. Setting it to empty switches it off, a common, dangerous “fix” |
+| `security.inter.broker.protocol` / `inter.broker.listener.name` | Whether brokers talk to each other over TLS too |
+
+Two production notes. Broker certificates must list every name clients use, including each broker's advertised hostname, which fails often behind load balancers. And TLS disables Kafka's zero-copy `sendfile` path for consumers, because the data must be encrypted in user space, so expect some extra CPU (Part 2, concept 2.7).
+
+<Takeaway>
+Kafka TLS is Java keystores per listener; keep hostname verification on and put every advertised name in the certificates.
+</Takeaway>
+
+<span id="concept-t1-11"></span>
+
+### <span class="concept-badge">T1.11</span> Why handshakes fail
+
+Most TLS failures fall into a handful of patterns, each with a recognisable error message. Pick the error you're seeing:
+
+<TlsFailures client:visible />
+
+<Takeaway>
+Read the error, then check the chain, the names, the dates, the versions and SNI, in that order.
+</Takeaway>
+
+<span id="concept-t1-12"></span>
+
+### <span class="concept-badge">T1.12</span> Key usage and extended key usage
+
+Certificates say what they may be used for. **Extended key usage** (EKU) lists purposes: `serverAuth` for TLS servers and `clientAuth` for mTLS clients. A server certificate reused as a client certificate is rejected if it lacks `clientAuth`. CA certificates carry `basicConstraints: CA:TRUE` and permission to sign certificates; a leaf must not. Check with `openssl x509 -in cert.pem -noout -ext extendedKeyUsage,basicConstraints,keyUsage`.
+
+<Takeaway>
+Certificates carry their allowed uses; mTLS client certificates need clientAuth.
+</Takeaway>
+
+<span id="concept-t1-13"></span>
+
+### <span class="concept-badge">T1.13</span> Revocation, transparency and shrinking lifetimes
+
+**Revocation** has always worked poorly ([5.11](/part-5-tls/#concept-5-11)). OCSP **stapling** (`ssl_stapling on` in nginx) let servers attach a fresh revocation status, but the industry is moving away from OCSP altogether: Let's Encrypt shut its OCSP service down in 2025 in favour of CRLs.
+
+**Certificate Transparency** (CT) took a different approach: every publicly trusted certificate must be logged in public, append-only logs, and browsers require proof of logging (SCTs). Anyone can watch the logs, so you can monitor a service such as crt.sh for certificates issued for your domains that you didn't request.
+
+And lifetimes are shrinking: the CA/Browser Forum has voted to cut the maximum validity of public certificates in stages, to 200 days from 2026, 100 days from 2027 and **47 days from 2029**. Short lifetimes limit the damage from a stolen key, and they make manual renewal impossible.
+
+<Takeaway>
+Revocation is fading; Certificate Transparency and short-lived, automatically renewed certificates replace it.
+</Takeaway>
+
+<span id="concept-t1-14"></span>
+
+### <span class="concept-badge">T1.14</span> Running certificates in a company
+
+Internal services usually use a **private CA** rather than public certificates. Examples are AWS Private CA, HashiCorp Vault's PKI engine and smallstep's step-ca. The CA's root goes into every internal truststore, and services get short-lived certificates (days or hours) issued automatically.
+
+| Practice | Why |
+|---|---|
+| Automate issuance and renewal | Manual renewal guarantees an expiry outage eventually |
+| Rotate with overlap | Deploy the new certificate before the old one expires; trust the new CA before switching to it |
+| Monitor expiry from outside | Probe endpoints and alert at 30, 14 and 7 days (for example `probe_ssl_earliest_cert_expiry` from Prometheus' blackbox exporter) |
+| Keep keys out of reach | Generate keys where they'll live; keep CA keys in a KMS or HSM; never commit keys |
+| Inventory every certificate | You can't renew what you don't know exists |
+
+<Takeaway>
+Use a private CA with short-lived, automatically renewed certificates, and monitor expiry from outside.
+</Takeaway>
+
+<span id="concept-t1-15"></span>
+
+### <span class="concept-badge">T1.15</span> What TLS costs
+
+A new HTTPS connection costs round trips before the first byte: TCP's handshake plus one (TLS 1.3) or two (TLS 1.2). On a 100 ms cross-region link, that's 200–300 ms. Keep-alive ([3.8](/part-3-http11/#concept-3-8)), connection pools and session resumption ([5.7](/part-5-tls/#concept-5-7)) avoid paying it repeatedly.
+
+The handshake's asymmetric step costs CPU, and ECDSA certificates are much cheaper for servers than RSA ones. Bulk encryption is cheap on modern CPUs (AES-NI). Encryption also breaks zero-copy `sendfile`, unless the kernel does the encryption (**kTLS**, which nginx can use with OpenSSL 3).
+
+<Takeaway>
+TLS costs round trips and handshake CPU; reuse connections, resume sessions and prefer ECDSA.
+</Takeaway>
+
+## Try it
+
+#### Inspect, convert and match
+
+```bash
+openssl s_client -connect example.com:443 -servername example.com -showcerts </dev/null
+openssl x509 -in cert.pem -noout -subject -issuer -dates -ext subjectAltName,extendedKeyUsage
+openssl x509 -in cert.pem -outform der -out cert.der            # PEM → DER
+openssl pkcs12 -export -inkey key.pem -in fullchain.pem -out server.p12   # key + chain → PKCS#12
+diff <(openssl x509 -in cert.pem -noout -pubkey) <(openssl pkey -in key.pem -pubout) && echo match
+```
+
+#### Break and fix a Java client
+
+```bash
+# 1. Serve your Part 5 private-CA certificate, then from Java:
+jshell <<< 'new java.net.URL("https://localhost:8443").openStream()'   # PKIX path building failed
+# 2. Trust your CA, and try again:
+keytool -importcert -noprompt -alias lab-root -file root.pem -keystore lab-trust.p12 -storepass changeit
+jshell -R-Djavax.net.ssl.trustStore=lab-trust.p12 -R-Djavax.net.ssl.trustStorePassword=changeit \
+  <<< 'new java.net.URL("https://localhost:8443").openStream()'                         # works
+```
+
+#### TLS 1.2 vs 1.3 on the wire
+
+```bash
+openssl s_client -connect example.com:443 -servername example.com -tls1_2 -msg </dev/null | grep -c '>>>'
+openssl s_client -connect example.com:443 -servername example.com -tls1_3 -msg </dev/null | grep -c '>>>'
+```
+
+## You've got it when
+
+<Checkpoint>
+
+- Say whether a scenario needs encoding, hashing, a MAC, encryption or a signature, and why the others are wrong.
+- Explain why TLS 1.2 with RSA key exchange has no forward secrecy, and why TLS 1.3 needs one round trip fewer.
+- Convert between PEM, DER and PKCS#12, and prove that a key matches its certificate.
+- Explain keystore vs truststore, and fix a `PKIX path building failed` error.
+- Configure a Kafka listener for TLS and mTLS, and say why hostname verification must stay on.
+- Diagnose a failing handshake from its error message.
+- Design certificate management for a company: private CA, automated renewal, rotation and expiry monitoring.
+
+</Checkpoint>

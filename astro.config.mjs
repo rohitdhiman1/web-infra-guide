@@ -40,8 +40,11 @@ export default defineConfig({
         {
           label: 'Phase 3 — Secure it',
           items: [
+            page('T0 — Symmetric and asymmetric cryptography', 'practice/t0-symmetric-asymmetric'),
             page('Part 5 — TLS and HTTPS', 'part-5-tls'),
+            page('T1 — TLS in practice', 'practice/t1-tls-in-practice'),
             page('Part 6 — HTTP/2 and HTTP/3', 'part-6-http2-http3'),
+            page('T2 — HTTP/2 and HTTP/3 in production', 'practice/t2-http2-http3-in-production'),
           ],
         },
         {

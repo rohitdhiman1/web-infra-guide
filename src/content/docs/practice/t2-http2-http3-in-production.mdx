@@ -1,0 +1,205 @@
+---
+title: "T2 — HTTP/2 and HTTP/3 in production"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import FrameMux from '../../../components/diagrams/FrameMux.tsx';
+import LbPinning from '../../../components/diagrams/LbPinning.tsx';
+
+[Part 6](/part-6-http2-http3/) covers what HTTP/2 and HTTP/3 are. This module covers what changes when you run them: how a client and server agree to use them, what happens behind a proxy, why gRPC breaks naive load balancing, the attacks to defend against, and what UDP does to your infrastructure. These are the questions that come up once services talk gRPC and traffic crosses load balancers.
+
+## The protocols at a glance
+
+| | HTTP/1.1 | HTTP/2 | HTTP/3 |
+|---|---|---|---|
+| Transport | TCP | TCP | QUIC over UDP |
+| Requests per connection | One at a time | Many, multiplexed as streams | Many, independent streams |
+| Headers | Plain text, repeated each time | Compressed (HPACK) | Compressed (QPACK) |
+| Encryption | Optional | Required by browsers | Always (TLS 1.3 built in) |
+| How clients find it | Default | ALPN during the TLS handshake | `Alt-Svc` header or an HTTPS DNS record |
+| A lost packet stalls | That connection | Every stream on the connection | Only its own stream |
+
+<FrameMux client:visible />
+
+## Concepts
+
+<span id="concept-t2-1"></span>
+
+### <span class="concept-badge">T2.1</span> How HTTP/2 is negotiated
+
+Over TLS, the client offers protocols in the **ALPN** extension of its ClientHello (`h2`, `http/1.1`) and the server picks one ([5.9](/part-5-tls/#concept-5-9)), so HTTP/2 costs no extra round trip. Browsers only speak HTTP/2 over TLS.
+
+Without TLS, HTTP/2 is called **h2c** (cleartext). The client must simply know the server speaks it (“prior knowledge”), because the old `Upgrade: h2c` mechanism was deprecated in RFC 9113. h2c is used between services inside a trusted network, for example gRPC without TLS. `curl -v --http2` shows `ALPN: server accepted h2` when it works.
+
+<Takeaway>
+HTTP/2 is negotiated in the TLS handshake through ALPN; cleartext h2c needs prior knowledge.
+</Takeaway>
+
+<span id="concept-t2-2"></span>
+
+### <span class="concept-badge">T2.2</span> HTTP/2 behind a proxy
+
+The protocol is chosen **per hop**. A browser can speak HTTP/2 to nginx while nginx speaks HTTP/1.x to the backend. `proxy_pass` actually defaults to HTTP/1.0, so set `proxy_http_version 1.1` to get keep-alive connections ([Part 8](/part-8-reverse-proxy/)). Each hop gets its own benefits and limits:
+
+| Hop | Usual protocol | Notes |
+|---|---|---|
+| Browser → edge (CDN, ALB, nginx) | HTTP/2 or HTTP/3 | Where multiplexing and header compression pay off most |
+| nginx → backend (`proxy_pass`) | HTTP/1.1 with keep-alive | `proxy_http_version 1.1` plus an upstream `keepalive` pool; HTTP/2 isn't needed there |
+| nginx → gRPC backend | HTTP/2, required | gRPC needs HTTP/2 end to end: use `grpc_pass`, not `proxy_pass` |
+| ALB → targets | HTTP/1.1 by default | Set the target group's protocol version to HTTP/2 or gRPC when the backend needs it |
+
+<Takeaway>
+Each hop negotiates its own protocol; HTTP/1.1 is fine behind the edge, except for gRPC, which needs HTTP/2 all the way.
+</Takeaway>
+
+<span id="concept-t2-3"></span>
+
+### <span class="concept-badge">T2.3</span> Trailers
+
+**Trailers** are headers sent *after* the body. HTTP/1.1 technically had them (with chunked encoding), but almost nothing supported them. HTTP/2 makes them easy: a final HEADERS frame on the stream. gRPC depends on them: the response's `grpc-status` and `grpc-message` arrive as trailers, because a streaming call only knows whether it succeeded at the end.
+
+That's one reason gRPC can't pass through a proxy that downgrades to HTTP/1.1, or that strips trailers.
+
+<Takeaway>
+Trailers are headers after the body; gRPC puts its status there, so every hop must carry them.
+</Takeaway>
+
+<span id="concept-t2-4"></span>
+
+### <span class="concept-badge">T2.4</span> Long-lived connections and load balancing
+
+An HTTP/1.1 client opens and closes many connections, so even a connection-level (layer 4) load balancer spreads its traffic. An HTTP/2 or gRPC client opens **one** connection and keeps it for hours, sending everything over it. A layer-4 balancer picks a backend once per connection, so one busy client lands entirely on one backend, and a newly added backend gets nothing until clients reconnect.
+
+The fixes:
+- a **layer-7** balancer that understands HTTP/2 and balances each request (Envoy, nginx `grpc_pass`, an ALB in gRPC mode);
+- **client-side load balancing**, where the gRPC client spreads requests over several backend addresses;
+- a **maximum connection age** on the server, so connections are recycled and rebalanced.
+
+<LbPinning client:visible />
+
+<Takeaway>
+HTTP/2 concentrates a client on one connection, so balance per request at layer 7, or recycle connections.
+</Takeaway>
+
+<span id="concept-t2-5"></span>
+
+### <span class="concept-badge">T2.5</span> Stream limits and the Rapid Reset attack
+
+Each HTTP/2 connection can carry many streams, limited by the `SETTINGS_MAX_CONCURRENT_STREAMS` value each side announces (commonly 100 to 128). In October 2023, **Rapid Reset** (CVE-2023-44487) used multiplexing as a weapon. Attackers opened streams and immediately cancelled them with `RST_STREAM`, again and again. Each cancelled stream no longer counted against the limit, but the server had already started working on it. A few connections generated record-breaking request rates against Google, Cloudflare and AWS.
+
+Servers were patched to count resets and close abusive connections (nginx 1.25.3 and later, among others). Keep HTTP/2 servers patched, keep sensible stream limits (`http2_max_concurrent_streams` in nginx), and rate-limit at the edge (A9).
+
+<Takeaway>
+Multiplexing can be abused: keep HTTP/2 servers patched against Rapid Reset, and limit streams and requests per connection.
+</Takeaway>
+
+<span id="concept-t2-6"></span>
+
+### <span class="concept-badge">T2.6</span> Flow control windows
+
+HTTP/2 has its own flow control on top of TCP's ([6.4](/part-6-http2-http3/#concept-6-4)): each stream and the whole connection have a window, which starts at 65,535 bytes and is enlarged with `WINDOW_UPDATE` frames. It stops one large stream from starving the others.
+
+If a window is too small for the link, a single big transfer stalls waiting for updates. Over long, fast links (cross-region replication, large gRPC streams), the window has to cover the bandwidth-delay product. Most servers and gRPC libraries raise or auto-tune it, but it's worth checking when “HTTP/2 is slower than HTTP/1.1” for big downloads.
+
+<Takeaway>
+HTTP/2 flow control windows must be large enough for the link's bandwidth-delay product, or big transfers crawl.
+</Takeaway>
+
+<span id="concept-t2-7"></span>
+
+### <span class="concept-badge">T2.7</span> Server push is gone; Early Hints replaced it
+
+**Server push** let a server send resources before the browser asked for them. In practice it often pushed things the browser already had cached, and wasted bandwidth. Chrome removed it in 2022. Its replacement is **103 Early Hints** (RFC 8297): an informational response sent while the real response is still being prepared, listing `Link: </app.css>; rel=preload` headers so the browser can start fetching in parallel.
+
+<Takeaway>
+Don't build on HTTP/2 push; use 103 Early Hints to let browsers preload.
+</Takeaway>
+
+<span id="concept-t2-8"></span>
+
+### <span class="concept-badge">T2.8</span> Connection coalescing and 421
+
+Browsers can reuse one HTTP/2 connection for **several hostnames** when the names resolve to the same IP and the certificate covers all of them (in its SAN list). That saves handshakes, but it can surprise you. Requests for `admin.example.com` may arrive on a connection that was opened for `www.example.com`, at a server that only expected `www`.
+
+A server that receives a request it can't serve on that connection must answer **421 Misdirected Request**, and the browser retries on a new connection. It's a reason to keep certificate SANs and server routing in sync (see [One hostname, three checks](/one-hostname-three-checks/)).
+
+<Takeaway>
+One HTTP/2 connection may carry several hostnames; answer 421 when a request reaches the wrong server.
+</Takeaway>
+
+<span id="concept-t2-9"></span>
+
+### <span class="concept-badge">T2.9</span> Running HTTP/3
+
+| Challenge | What to do |
+|---|---|
+| Discovery | Clients connect over HTTP/2 first and learn about HTTP/3 from `Alt-Svc: h3=":443"`, or ahead of time from an **HTTPS DNS record** (RFC 9460) |
+| UDP 443 blocked | Some corporate networks block it; clients fall back to HTTP/2 over TCP. Keep both working, and open UDP 443 in security groups and firewalls |
+| Load balancing | QUIC connections are identified by a **connection ID**, not the 4-tuple, so balancers must route by connection ID or by UDP flow, and many layer-4 balancers need explicit UDP support |
+| Connection migration | A client changing network (Wi-Fi to mobile) keeps its connection, because the connection ID survives the new IP and port |
+| 0-RTT replay | Early data can be replayed by an attacker: accept it only for safe, idempotent requests, and answer **425 Too Early** otherwise (RFC 8470) |
+| CPU | QUIC runs in user space, with encryption per packet; expect more CPU per byte than TCP + TLS, partly recovered by UDP offload (GSO) |
+
+<Takeaway>
+HTTP/3 needs UDP 443 open, balancers that understand QUIC, fallback to HTTP/2, and care with 0-RTT.
+</Takeaway>
+
+<span id="concept-t2-10"></span>
+
+### <span class="concept-badge">T2.10</span> When newer isn't faster
+
+HTTP/2 puts every request on one TCP connection, so on a **lossy** network one lost packet stalls all of them ([6.5](/part-6-http2-http3/#concept-6-5)). Several HTTP/1.1 connections can actually do better there. HTTP/3 fixes that, but costs more CPU, and it's sometimes blocked.
+
+For service-to-service calls inside one data centre (low latency, almost no loss), the differences shrink; HTTP/1.1 with keep-alive is often fine unless you need gRPC or streaming. The honest answer to “which is fastest?” is **measure it**, with `h2load`, real traffic, and loss added with `tc netem` as in Part 6's lab.
+
+<Takeaway>
+Newer protocols help most on the open internet; inside a data centre, measure before switching.
+</Takeaway>
+
+## Try it
+
+#### See what each hop negotiates
+
+```bash
+curl -sv --http2 https://example.com -o /dev/null 2>&1 | grep -iE 'ALPN|HTTP/2'
+curl -sI https://www.cloudflare.com | grep -i alt-svc              # advertises h3
+dig +short HTTPS cloudflare.com                                    # the HTTPS DNS record
+curl -sv --http3-only https://www.cloudflare.com -o /dev/null      # needs curl built with HTTP/3
+```
+
+#### HTTP/2 to nginx, HTTP/1.1 to the backend
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    http2_max_concurrent_streams 128;
+
+    location /      { proxy_pass http://app; proxy_http_version 1.1; proxy_set_header Connection ""; }
+    location /orders.v1.OrderService/ { grpc_pass grpc://grpc_backend; }   # gRPC: HTTP/2 end to end
+}
+```
+
+#### Watch frames with h2load
+
+```bash
+h2load -n 2000 -c 10 -m 100 https://your-vm/        # 10 connections x 100 concurrent streams
+h2load -n 2000 -c 10 -m 1 --h1 https://your-vm/     # same load over HTTP/1.1
+```
+
+## You've got it when
+
+<Checkpoint>
+
+- Explain how HTTP/2 is negotiated over TLS, and what h2c is.
+- Say which protocol each hop speaks between a browser and a backend, and why gRPC needs HTTP/2 end to end.
+- Explain why gRPC traffic can pile onto one backend behind a layer-4 balancer, and give three fixes.
+- Describe the Rapid Reset attack and how servers defend against it.
+- Say what replaced server push, and when a server should answer 421.
+- List what HTTP/3 needs from your network and load balancers, and when 0-RTT is unsafe.
+- Argue, with measurements, whether HTTP/2 or HTTP/3 will actually help a given system.
+
+</Checkpoint>

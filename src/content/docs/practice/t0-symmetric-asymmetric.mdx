@@ -1,0 +1,235 @@
+---
+title: "T0 — Symmetric and asymmetric cryptography"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import KeyProblem from '../../../components/diagrams/KeyProblem.tsx';
+import DhMixing from '../../../components/diagrams/DhMixing.tsx';
+import KeyRoles from '../../../components/diagrams/KeyRoles.tsx';
+import HybridFlow from '../../../components/diagrams/HybridFlow.tsx';
+import CryptoSpeed from '../../../components/diagrams/CryptoSpeed.tsx';
+
+Every TLS connection, SSH session, signed JWT and encrypted S3 object combines two kinds of cryptography. **Symmetric** cryptography is fast and does the actual encrypting. **Asymmetric** cryptography is slow, but solves the problems symmetric cryptography can't: agreeing on a key with a stranger, and proving who someone is. This page builds the picture in that order, and it's the foundation for [Part 5](/part-5-tls/).
+
+## The two kinds
+
+:::note[Definition]
+**Symmetric** cryptography uses **one secret key** shared by both sides: the same key encrypts and decrypts.
+
+**Asymmetric** (public-key) cryptography uses a **key pair**: a **public key** that can be given to anyone, and a **private key** that never leaves its owner. What one key does, only the other can undo.
+:::
+
+| | Symmetric | Asymmetric |
+|---|---|---|
+| Keys | One shared secret | A public/private key pair per party |
+| Speed | Very fast: gigabytes per second | Slow: thousands of operations per second |
+| Data size | Any | Small: a key, a hash, a few hundred bytes |
+| Main algorithms | AES-GCM, ChaCha20-Poly1305 | X25519 (key agreement), ECDSA and Ed25519 (signatures), RSA |
+| Hard part | Getting the shared key to the other side | Knowing a public key really belongs to who it claims |
+| Used for | Encrypting the data | Agreeing on keys, and signatures |
+
+## Concepts
+
+<span id="concept-t0-1"></span>
+
+### <span class="concept-badge">T0.1</span> Symmetric encryption: one shared key
+
+Both sides hold the same key. AES, the standard, scrambles data in 16-byte blocks; modern **AEAD** modes such as AES-GCM and ChaCha20-Poly1305 also attach a tag that detects any tampering. Modern CPUs have AES instructions built in (AES-NI), so a single core encrypts at gigabytes per second, which is why bulk data is always encrypted symmetrically.
+
+A 256-bit key has 2²⁵⁶ (about 10⁷⁷) possible values: trying them all is far beyond any computer that could ever be built, so nobody brute-forces AES. When symmetric encryption fails in practice, it's the **key** that leaked or the mode that was misused (for example a GCM nonce used twice), not the algorithm.
+
+<Takeaway>
+Symmetric encryption is fast and strong; its security is entirely in keeping one shared key secret.
+</Takeaway>
+
+<span id="concept-t0-2"></span>
+
+### <span class="concept-badge">T0.2</span> Where symmetric encryption is the right tool
+
+| Where | Why symmetric works |
+|---|---|
+| Every byte inside a TLS connection | Both sides already agreed on a key during the handshake |
+| Disk and database encryption at rest (LUKS, BitLocker, RDS, TDE) | One system both writes and reads, so the key never has to travel |
+| Objects in S3, GCS and backups | A data key encrypts the object, and a KMS guards that key (T0.7) |
+| VPN tunnels (WireGuard, IPsec) after setup | Peers already share session keys |
+| Session cookies and tokens a service issues for itself | The same service encrypts and decrypts, so no one else needs the key |
+
+The pattern: symmetric encryption is perfect when **the same party** encrypts and decrypts, or when the parties **already share a key**.
+
+<Takeaway>
+Use symmetric encryption whenever the key doesn't have to travel, or has already been agreed.
+</Takeaway>
+
+<span id="concept-t0-3"></span>
+
+### <span class="concept-badge">T0.3</span> Where symmetric encryption breaks down
+
+Symmetric cryptography alone has three problems it can't solve:
+
+| Problem | Why |
+|---|---|
+| **Key distribution** | Two strangers on the internet can't agree on a key over a channel an attacker reads. Sending the key protects nothing |
+| **Too many keys** | Every pair needs its own key: n people need n × (n − 1) ÷ 2. For 1,000 people that's 499,500 keys, each delivered secretly |
+| **No proof of origin** | Both sides hold the same key, so either could have produced a message. A shared key can't prove *who* wrote something to a third party |
+
+<KeyProblem client:visible />
+
+<Takeaway>
+Symmetric cryptography can't get a key to a stranger, doesn't scale to many parties, and can't prove who wrote something.
+</Takeaway>
+
+<span id="concept-t0-4"></span>
+
+### <span class="concept-badge">T0.4</span> Asymmetric cryptography: a key pair
+
+The breakthrough of the 1970s (Diffie-Hellman in 1976, RSA in 1977) was splitting the key in two. The **public key** can be published anywhere: in a certificate, on a website, in `~/.ssh/authorized_keys`. The **private key** never leaves its owner, ideally never leaves the hardware it was made in.
+
+The two keys are linked by mathematics that's easy one way and practically impossible to reverse: factoring a huge number (RSA), or finding a discrete logarithm on an elliptic curve (ECDSA, X25519, Ed25519). Elliptic-curve keys are much smaller for the same strength: a 256-bit EC key is roughly as strong as a 3,072-bit RSA key.
+
+The price is speed. Asymmetric operations are thousands of times slower than symmetric ones (measure it yourself in T0.8), and they work only on small amounts of data.
+
+<Takeaway>
+A key pair splits the key into a public half anyone may have and a private half no one else ever sees.
+</Takeaway>
+
+<span id="concept-t0-5"></span>
+
+### <span class="concept-badge">T0.5</span> Key agreement: Diffie-Hellman
+
+The most common use of asymmetric cryptography doesn't encrypt anything. **Diffie-Hellman** lets two parties who have never met agree on a shared secret over a network that everyone can read. Each makes a temporary key pair, they swap public keys, and each combines its own private key with the other's public key. Both arrive at the same secret, which never crossed the wire. That secret then becomes the symmetric key.
+
+When the key pairs are thrown away after one use (**ephemeral** Diffie-Hellman), a later theft of the server's long-term key can't decrypt recorded traffic: **forward secrecy** ([5.3](/part-5-tls/#concept-5-3)). Every TLS 1.3 handshake, SSH session, WireGuard tunnel and Signal message starts this way, usually with X25519.
+
+<DhMixing client:visible />
+
+<Takeaway>
+Diffie-Hellman agrees on a symmetric key in public; with throwaway keys it also gives forward secrecy.
+</Takeaway>
+
+<span id="concept-t0-6"></span>
+
+### <span class="concept-badge">T0.6</span> Encrypting and signing: which key does what
+
+A key pair can be used in two directions:
+
+| Goal | Who does what | Gives you | Example |
+|---|---|---|---|
+| **Encrypt**: only Bob can read it | Encrypt with **Bob's public key**; Bob decrypts with his **private key** | Confidentiality | Wrapping a data key; old RSA key exchange |
+| **Sign**: prove Alice wrote it | Alice signs with **her private key**; anyone verifies with **her public key** | Authenticity, integrity, proof to third parties | Certificates, JWT RS256/ES256, SSH, signed releases |
+
+Signing is the more common of the two today. Unlike a shared-key MAC (T1.3), a verifier can check a signature without being able to forge one, so it fixes the third problem from T0.3.
+
+<KeyRoles client:visible />
+
+<Takeaway>
+Encrypt to someone's public key; sign with your own private key.
+</Takeaway>
+
+<span id="concept-t0-7"></span>
+
+### <span class="concept-badge">T0.7</span> Production uses both: two keys, two jobs
+
+No real system encrypts bulk data asymmetrically. They all do the slow, special work once and hand the data to symmetric encryption:
+
+| System | Asymmetric (or protected) part, done once | Symmetric part, for the data |
+|---|---|---|
+| TLS | ECDHE key agreement + certificate signature | AES-GCM or ChaCha20 for every byte |
+| SSH | Key exchange + host and user key signatures | AES or ChaCha20 for the session |
+| PGP, age (file encryption) | A random file key, encrypted to the recipient's public key | The file, under that key |
+| KMS envelope encryption | A data key, wrapped by a master key that never leaves the KMS | The object or backup, under the data key |
+| JWT | The token is signed (RS256/ES256) | Not encrypted at all, unless you use JWE |
+
+<HybridFlow client:visible />
+
+<Takeaway>
+Real systems use the slow, protected key once to set up a fast symmetric key, then encrypt the data symmetrically.
+</Takeaway>
+
+<span id="concept-t0-8"></span>
+
+### <span class="concept-badge">T0.8</span> How big the speed difference really is
+
+Asymmetric operations cost orders of magnitude more than symmetric ones. Rather than quote someone else's numbers, measure them on your own machine:
+
+<CryptoSpeed client:visible />
+
+This also explains two production habits. Servers prefer **ECDSA** certificates, because RSA signing is so much more expensive, and handshake CPU is the cost of TLS at scale. And connection reuse and session resumption matter, because each new handshake pays the asymmetric price again (T1.15).
+
+<Takeaway>
+Asymmetric operations are thousands of times costlier than symmetric ones, so do them once per connection, not per byte.
+</Takeaway>
+
+<span id="concept-t0-9"></span>
+
+### <span class="concept-badge">T0.9</span> The trust problem: whose public key is this?
+
+Asymmetric cryptography moves the problem rather than removing it. Encrypting to “Bob's public key” only helps if it really is Bob's. An attacker in the middle can hand you **their** public key instead, decrypt everything, and re-encrypt it to the real Bob. Each system answers this differently:
+
+| Approach | How you trust a public key | Used by |
+|---|---|---|
+| Certificate authorities | A CA you already trust signs a certificate binding the key to a name ([5.4](/part-5-tls/#concept-5-4), [5.5](/part-5-tls/#concept-5-5)) | HTTPS, mTLS, Kafka TLS |
+| Trust on first use | Accept the key the first time, warn loudly if it ever changes | SSH (`known_hosts`) |
+| Out-of-band check | Compare fingerprints in person or over another channel | Signal safety numbers, PGP |
+| Pinned or pre-shared keys | Ship the expected key with the client | Mobile apps, internal service meshes |
+
+<Takeaway>
+A public key is only useful if you know whose it is: certificates, first-use trust or pinning provide that.
+</Takeaway>
+
+<span id="concept-t0-10"></span>
+
+### <span class="concept-badge">T0.10</span> What to choose today
+
+| Job | Choose | Avoid |
+|---|---|---|
+| Encrypt data | AES-256-GCM, or ChaCha20-Poly1305 (fast without AES hardware, common on mobile) | AES-CBC without a MAC, AES-ECB, DES, 3DES, RC4 |
+| Agree on a key | X25519, now often in a hybrid with ML-KEM (post-quantum) | Static RSA key exchange, plain finite-field Diffie-Hellman with small groups |
+| Sign | Ed25519 or ECDSA P-256; RSA-2048 or larger where compatibility requires it | RSA under 2048 bits, DSA, SHA-1 signatures |
+| Hash | SHA-256, SHA-384, SHA-3 | MD5, SHA-1 |
+| Store passwords | Argon2id, scrypt, bcrypt | Any fast hash, or encryption |
+
+Quantum computers would break RSA and elliptic-curve cryptography, though not AES-256. That's why browsers and OpenSSL now default to **hybrid post-quantum key agreement** (X25519 + ML-KEM) in TLS 1.3: traffic recorded today can't be decrypted later.
+
+<Takeaway>
+AES-GCM for data, X25519 (with ML-KEM) for key agreement, Ed25519 or ECDSA for signatures.
+</Takeaway>
+
+## Try it
+
+```bash
+# Symmetric: one key, both directions
+openssl rand -hex 32 > aes.key
+echo 'pay ord_1: €30' | openssl enc -aes-256-cbc -pbkdf2 -pass file:aes.key -base64 > msg.enc
+openssl enc -d -aes-256-cbc -pbkdf2 -pass file:aes.key -base64 -in msg.enc
+
+# Asymmetric: a key pair, sign and verify
+openssl genpkey -algorithm ed25519 -out alice.key
+openssl pkey -in alice.key -pubout -out alice.pub
+echo 'pay ord_1: €30' > msg.txt
+openssl pkeyutl -sign -rawin -inkey alice.key -in msg.txt -out msg.sig
+openssl pkeyutl -verify -rawin -pubin -inkey alice.pub -in msg.txt -sigfile msg.sig   # Signature Verified Successfully
+
+# Key agreement: two X25519 key pairs, one shared secret
+openssl genpkey -algorithm x25519 -out a.key && openssl pkey -in a.key -pubout -out a.pub
+openssl genpkey -algorithm x25519 -out b.key && openssl pkey -in b.key -pubout -out b.pub
+openssl pkeyutl -derive -inkey a.key -peerkey b.pub | xxd -p
+openssl pkeyutl -derive -inkey b.key -peerkey a.pub | xxd -p    # the same bytes
+```
+
+`enc` uses CBC here only because the `openssl enc` command doesn't support AEAD modes. Real systems use AES-GCM through a library.
+
+## You've got it when
+
+<Checkpoint>
+
+- Explain why symmetric encryption encrypts all the data, and the three problems it can't solve alone.
+- Explain how Diffie-Hellman agrees on a secret in public, and how ephemeral keys give forward secrecy.
+- Say which key encrypts and which signs, and what each gives you.
+- Describe how TLS, SSH and KMS envelope encryption combine the two kinds.
+- Explain the man-in-the-middle problem, and how certificates, trust on first use and pinning solve it.
+- Pick algorithms for data, key agreement, signatures and passwords, and say why quantum computers drive hybrid key exchange.
+
+</Checkpoint>
