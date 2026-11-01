@@ -273,3 +273,10 @@
   background: color-mix(in srgb, var(--sl-color-blue-low) 60%, transparent);
   border-radius: 0 0.5rem 0.5rem 0;
 }
+
+/* A slightly wider left navigation, so long page titles wrap less. (Starlight's default is 18.75rem.) */
+@media (min-width: 50rem) {
+  :root {
+    --sl-sidebar-width: 20.5rem;
+  }
+}
