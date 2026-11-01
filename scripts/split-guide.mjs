@@ -13,6 +13,8 @@
 //     "Concepts", "In the sandbox" and "You've got it when" become sections,
 //     the self-check goes in a <Checkpoint> box, standalone bold labels become
 //     headings, and each diagram near the top gets a heading from its title
+//   - EXTRAS: components that aren't in the guide (such as the HTTP timeline on
+//     Part 3) are inserted after a page's opening paragraph
 //
 // Re-run with `npm run split-guide`. It overwrites src/content/docs/*.mdx.
 
@@ -71,6 +73,14 @@ const DIAGRAMS = [
   ['request path', 'RequestPath'],
   ['learning path', 'LearningPath'],
 ];
+
+/**
+ * Extra components that aren't in the guide, inserted after a page's opening paragraph.
+ * They add material without touching the guide's wording.
+ */
+const EXTRAS = {
+  'part-3-http11': ['HttpTimeline'],
+};
 
 const pageHref = (slug) => (slug === 'index' ? '/' : `/${slug}/`);
 const conceptId = (num) => `concept-${num.replace('.', '-')}`;
@@ -262,6 +272,7 @@ const DIAGRAM_TITLES = {
   DebuggingFlow: 'Debugging flow',
   RequestPath: 'Request path',
   LearningPath: 'The path at a glance',
+  HttpTimeline: 'How HTTP got here',
 };
 
 const MAJOR = /^(Concepts|In the sandbox.*|You['’]ve got it when)$/;
@@ -368,7 +379,14 @@ for (const f of readdirSync(OUT)) if (f.endsWith('.mdx') || f.endsWith('.md')) r
 
 const yaml = (s) => JSON.stringify(s);
 for (const s of pageSections) {
-  const { imports, body: raw } = transformSection(s);
+  const { imports, body: generated } = transformSection(s);
+  // Insert any extras after the opening paragraph (the first blank line).
+  let raw = generated;
+  for (const name of EXTRAS[s.page.slug] ?? []) {
+    imports.push(`import ${name} from '../../components/diagrams/${name}';`);
+    const cut = raw.indexOf('\n\n');
+    raw = cut < 0 ? `${raw}\n\n<${name} client:visible />` : `${raw.slice(0, cut)}\n\n<${name} client:visible />${raw.slice(cut)}`;
+  }
   const { body, usesCheckpoint } = formatPage(raw);
   if (usesCheckpoint) imports.push("import Checkpoint from '../../components/content/Checkpoint.astro';");
   const fm = ['---', `title: ${yaml(s.heading)}`];
