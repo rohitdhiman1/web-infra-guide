@@ -1,0 +1,273 @@
+---
+title: "C2 — Container networking"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import PublishCheck from '../../../components/diagrams/PublishCheck.tsx';
+import DockerTopology from '../../../components/diagrams/DockerTopology.tsx';
+import ContainerPacketPath from '../../../components/diagrams/ContainerPacketPath.tsx';
+
+A container gets its own network stack: its own interfaces, IP address, routes and ports. Docker then connects that stack to the host with a few ordinary Linux building blocks: a virtual cable, a virtual switch and some NAT rules. This module takes those pieces apart on a single host, with no Kubernetes involved. The same pieces, plus a few more, are how pods get their networking later.
+
+## The building blocks
+
+:::note[Definition]
+**Container networking** on Linux is a **network namespace** (a private network stack) connected to the host by a **veth pair** (a virtual cable), usually plugged into a **bridge** (a virtual switch), with **NAT rules** in the kernel's packet filter to reach in and out.
+:::
+
+| Piece | Physical equivalent | See it with |
+|---|---|---|
+| Network namespace | A separate computer's network stack | `ip netns`, `lsns -t net` |
+| veth pair | A network cable with two ends | `ip link` (`vethXXXX@ifN`) |
+| Bridge (`docker0`) | A switch, plus the default gateway | `ip addr show docker0`, `bridge link` |
+| iptables or nftables rules | A NAT router and firewall | `sudo iptables -t nat -L -n -v` |
+| conntrack | The router's table of open connections | `sudo conntrack -L` |
+
+## Concepts
+
+<span id="concept-c2-1"></span>
+
+### <span class="concept-badge">C2.1</span> A network namespace is a private network stack
+
+Each network namespace has its own interfaces, IP addresses, routing table, firewall rules and **ports**. That's why two containers can both listen on port 8080: the ports live in different namespaces. A brand-new namespace has only a loopback interface, and it's down. It can't reach anything until something connects it.
+
+You can build one by hand: `sudo ip netns add demo`, then `sudo ip netns exec demo ip addr`. Docker does the same for every container (unless you use `--network host`).
+
+<Takeaway>
+A network namespace gives a container its own interfaces, routes and ports, and starts out connected to nothing.
+</Takeaway>
+
+<span id="concept-c2-2"></span>
+
+### <span class="concept-badge">C2.2</span> veth pairs: a virtual cable
+
+A **veth pair** is two virtual interfaces joined back to back: whatever goes in one end comes out of the other. Docker puts one end inside the container's namespace and names it `eth0`. The other end stays on the host with a name like `veth3a1f2c`.
+
+To match the two ends, run `ip link` on the host and compare its `@ifN` suffix with the interface index inside the container (`cat /sys/class/net/eth0/iflink`).
+
+<Takeaway>
+A veth pair is a cable between namespaces: the container's eth0 is one end and a vethXXXX on the host is the other.
+</Takeaway>
+
+<span id="concept-c2-3"></span>
+
+### <span class="concept-badge">C2.3</span> The bridge: a virtual switch and gateway
+
+The host ends of all those cables plug into a **bridge**. By default that's `docker0`, with the subnet `172.17.0.0/16` and the address `172.17.0.1`. A bridge works like a physical switch: containers on it reach each other directly at layer 2, and it learns which port leads to which MAC address.
+
+The bridge's own address, 172.17.0.1, is every container's **default gateway**. User-defined networks (`docker network create`, and every Compose project) get their own bridge (`br-…`) and their own subnet. Containers on different user-defined networks can't reach each other unless you connect them to both.
+
+<Takeaway>
+The bridge is a switch for the containers on it, and its IP is their default gateway.
+</Takeaway>
+
+<span id="concept-c2-4"></span>
+
+### <span class="concept-badge">C2.4</span> Routing, ARP and the default gateway
+
+Every packet's next hop comes from a **routing table**. Inside a container, `ip route` usually shows just two lines:
+
+```text
+default via 172.17.0.1 dev eth0
+172.17.0.0/16 dev eth0 proto kernel scope link src 172.17.0.2
+```
+
+The second line says “this subnet is directly attached”, so the container sends straight to it. Everything else goes to the gateway. To actually send on a directly attached network, the sender needs the target's MAC address, which it finds with **ARP**: “who has 172.17.0.3?” (`ip neigh` shows the answers it remembers).
+
+On the host, `ip route` shows `172.17.0.0/16 dev docker0`, and the host's own default route through `eth0`. With IP forwarding switched on (`net.ipv4.ip_forward=1`, which Docker sets), the host routes packets between the two: the host *is* the containers' router.
+
+<Takeaway>
+Routing tables pick the next hop, ARP finds its MAC address, and the host itself routes between containers and the outside.
+</Takeaway>
+
+<DockerTopology client:visible />
+
+<span id="concept-c2-5"></span>
+
+### <span class="concept-badge">C2.5</span> Outbound NAT: masquerade
+
+Container IPs like 172.17.0.2 are private: the rest of the network has no route back to them. So when a container connects out, the host rewrites the packet's **source** address to its own IP on the way out. This is **source NAT**, which Docker does with a `MASQUERADE` rule in the `nat` table's POSTROUTING chain.
+
+The kernel remembers each translation in conntrack (C2.7), so replies can be rewritten back to the container's address. It's the same mechanism as your home router, or a cloud NAT gateway ([1.11](/part-1-networking/#concept-1-11)), and the outside world sees the host's IP, not the container's.
+
+<Takeaway>
+Outbound traffic leaves with the host's IP (source NAT), and conntrack maps the replies back.
+</Takeaway>
+
+<span id="concept-c2-6"></span>
+
+### <span class="concept-badge">C2.6</span> Publishing ports: DNAT
+
+`docker run -p 8080:80` makes a container reachable from outside. It adds a **destination NAT** rule: packets arriving for the host's port 8080 have their destination rewritten to `172.17.0.2:80`. A userspace helper, `docker-proxy`, handles a few cases the kernel rules can't, such as connections from the host to itself.
+
+| Form | Listens on | Reachable from |
+|---|---|---|
+| `-p 8080:80` | Every host address, `0.0.0.0:8080` | **Anywhere that can reach the host** |
+| `-p 127.0.0.1:8080:80` | Loopback only | Only the host itself |
+| No `-p` | Nothing on the host | Only containers on the same network |
+
+One trap catches many teams: Docker inserts its rules *before* host firewalls such as ufw, so a published port is open **even if ufw says it's closed**. Put your own filtering in the `DOCKER-USER` chain, or publish on 127.0.0.1 and put a reverse proxy in front.
+
+<Takeaway>
+-p rewrites the destination (DNAT) and opens the port on every host address, past ufw; bind to 127.0.0.1 unless it should be public.
+</Takeaway>
+
+<PublishCheck client:visible />
+
+<span id="concept-c2-7"></span>
+
+### <span class="concept-badge">C2.7</span> conntrack: the connection table
+
+NAT only works if the kernel remembers each connection's translation. That memory is **conntrack**: a table with one entry per tracked flow, its addresses before and after NAT, and its state. It's also what stateful firewall rules (“allow established connections”) rely on.
+
+The table has a maximum size (`net.netfilter.nf_conntrack_max`). On a busy host, such as a load balancer or a node running many containers, it can fill up. The kernel then logs `nf_conntrack: table full, dropping packet`, and new connections fail at random while everything already open keeps working, which is very confusing from the outside. Check with `sudo conntrack -C` against the maximum, and look in `dmesg`.
+
+<Takeaway>
+NAT depends on conntrack; when its table fills, new connections are silently dropped.
+</Takeaway>
+
+<span id="concept-c2-8"></span>
+
+### <span class="concept-badge">C2.8</span> Names and DNS between containers
+
+On a **user-defined network**, Docker runs an embedded DNS server at `127.0.0.11` inside each container, which resolves other containers' names (and Compose service names) to their IPs. That's how `web` reaches `db:5432` without knowing db's address, and why addresses can change on restart without breaking anything.
+
+The **default bridge** doesn't offer this. Containers there only see the host's resolvers, so names don't work. That's one reason to always create a network rather than relying on `docker0`.
+
+<Takeaway>
+Use a user-defined network so containers find each other by name through Docker's DNS.
+</Takeaway>
+
+<span id="concept-c2-9"></span>
+
+### <span class="concept-badge">C2.9</span> The 127.0.0.1 trap
+
+Inside a container, `127.0.0.1` is the **container's own** loopback, not the host's. Two mistakes follow from that:
+
+| Mistake | What happens | Fix |
+|---|---|---|
+| The app listens on `127.0.0.1` (a common dev-server default) | Published-port traffic arrives on `eth0` (172.17.0.2), finds nothing listening, and gets a reset: “Connection reset by peer”, “Empty reply from server” | Listen on `0.0.0.0` inside containers |
+| The app connects to `localhost:5432` expecting the host's database | It reaches the container itself, where nothing listens: “Connection refused” | Use the other container's name, or `host.docker.internal` (Docker Desktop, or `--add-host=host.docker.internal:host-gateway` on Linux) |
+
+`ss -ltn` inside the container (or via `nsenter`, C2.11) shows exactly which address an app is bound to.
+
+<Takeaway>
+127.0.0.1 inside a container is the container itself: listen on 0.0.0.0, and reach other services by name.
+</Takeaway>
+
+<span id="concept-c2-10"></span>
+
+### <span class="concept-badge">C2.10</span> Other network modes and MTU
+
+| Mode | What it means | Use it for |
+|---|---|---|
+| `bridge` (default) | Own namespace, veth pair, NAT | Almost everything |
+| `host` | No network namespace: the host's interfaces and ports, no NAT | Maximum network performance, or tools that must see the host's network |
+| `none` | Only loopback | Batch jobs that must not touch the network |
+| `macvlan` | The container gets its own MAC and IP on the physical network | Legacy apps that must look like a separate machine |
+| `overlay` | A virtual network spanning several hosts, tunnelled in VXLAN | Multi-host setups (Swarm); the idea behind most pod networks |
+
+Tunnelling has a cost that bites in production: **MTU**. VXLAN wraps each packet in about 50 extra bytes, so an overlay on a 1500-byte network can only carry 1450-byte packets. If a container sends full-size packets and the path can't signal back properly (ICMP blocked), small requests work but large responses hang. That's a classic “TLS handshake or big download stalls, health checks pass” bug.
+
+<Takeaway>
+Bridge is the default, host skips isolation, and overlays add encapsulation that lowers the MTU.
+</Takeaway>
+
+<span id="concept-c2-11"></span>
+
+### <span class="concept-badge">C2.11</span> Debugging container networking
+
+Most container images have no network tools, but you don't need them inside. `nsenter` runs the **host's** tools inside the container's network namespace:
+
+```bash
+PID=$(docker inspect -f '{{.State.Pid}}' web)
+sudo nsenter -t $PID -n ip addr       # its interfaces
+sudo nsenter -t $PID -n ss -ltnp      # what it listens on, and on which address
+sudo nsenter -t $PID -n nc -vz 172.18.0.3 5432   # test from its point of view (host DNS here: use an IP)
+```
+
+| Check | Command |
+|---|---|
+| Container's IP and network | `docker inspect -f '{{json .NetworkSettings.Networks}}' web` |
+| Is traffic reaching the bridge or veth? | `sudo tcpdump -ni docker0 port 80` |
+| NAT rules Docker created | `sudo iptables -t nat -L -n -v` (or `sudo nft list ruleset`) |
+| Connection table size and contents | `sudo conntrack -C`, `sudo conntrack -L -p tcp --dport 8080` |
+| Forwarding switched on | `sysctl net.ipv4.ip_forward` |
+
+Work outside in, as in the [field guide](/field-guide/): does the packet reach the host, does NAT rewrite it, does it cross the bridge, and is anything listening on the right address?
+
+<Takeaway>
+Use nsenter to run host tools in a container's namespace, then follow the packet outside in.
+</Takeaway>
+
+## A packet's path through Docker networking
+
+Step through each scenario and watch the addresses: NAT rewrites the destination on the way in and the source on the way out, and conntrack reverses both for the replies.
+
+<ContainerPacketPath client:visible />
+
+## Try it on a Linux VM
+
+#### Build a container network by hand
+
+The same pieces Docker uses, with nothing but `ip`:
+
+```bash
+sudo ip netns add red                                   # a namespace
+sudo ip link add veth-red type veth peer name eth0-red  # a cable
+sudo ip link set eth0-red netns red                     # one end inside
+sudo ip link add br0 type bridge && sudo ip link set br0 up
+sudo ip link set veth-red master br0 && sudo ip link set veth-red up
+sudo ip addr add 10.10.0.1/24 dev br0                   # the gateway
+sudo ip netns exec red ip addr add 10.10.0.2/24 dev eth0-red
+sudo ip netns exec red ip link set eth0-red up
+sudo ip netns exec red ip link set lo up
+sudo ip netns exec red ip route add default via 10.10.0.1
+sudo ip netns exec red ping -c1 10.10.0.1               # it works
+```
+
+Add `sudo iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -j MASQUERADE` and `sudo sysctl -w net.ipv4.ip_forward=1`, and the namespace can reach the internet: you've rebuilt Docker's default network. Clean up with `sudo ip netns del red && sudo ip link del br0`.
+
+#### Watch Docker's NAT rules appear
+
+```bash
+sudo iptables -t nat -L DOCKER -n -v
+docker run -d --name web -p 8080:80 nginx
+sudo iptables -t nat -L DOCKER -n -v      # a new DNAT rule for 8080 → 172.17.0.x:80
+curl -s localhost:8080 >/dev/null; sudo conntrack -L -p tcp --dport 8080
+```
+
+#### Names only work on user-defined networks
+
+```bash
+docker network create shop
+docker run -d --name db --network shop -e POSTGRES_PASSWORD=lab postgres:17-alpine
+docker run --rm --network shop alpine nslookup db           # resolves
+docker run --rm alpine nslookup db                          # default bridge: fails
+```
+
+#### Spring the 127.0.0.1 trap
+
+```bash
+docker run -d --name trap -p 8081:8000 python:3.14-slim python -m http.server 8000 --bind 127.0.0.1
+curl -v localhost:8081                     # reset / empty reply
+docker exec trap python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000').status)"   # 200 inside
+docker rm -f trap
+```
+
+## You've got it when
+
+<Checkpoint>
+
+- Draw the path from a container's eth0 to the internet: veth pair, bridge, routing, masquerade.
+- Explain what `-p 8080:80` does in the kernel, and why it can bypass ufw.
+- Explain why replies find their way back through NAT, and what happens when conntrack's table fills.
+- Make two containers reach each other by name, and say why that fails on the default bridge.
+- Diagnose “works with docker exec, fails from outside” as the 127.0.0.1 trap.
+- Choose between bridge, host and none, and explain how an overlay's MTU breaks large responses.
+- Debug a container's network from the host with nsenter, tcpdump, iptables and conntrack.
+
+</Checkpoint>
