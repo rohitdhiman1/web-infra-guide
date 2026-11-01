@@ -1,5 +1,5 @@
 ---
-/** The end-of-module self-check. Usage: <Checkpoint> - item - item </Checkpoint> */
+/** The end-of-module self-check. Usage: <Checkpoint> - item - item </Checkpoint>. title="" hides the title. */
 interface Props {
   title?: string;
 }
@@ -7,6 +7,6 @@ const { title = 'Without notes, you can:' } = Astro.props;
 ---
 
 <aside class="checkpoint" aria-label={title}>
-  <p class="checkpoint-title">{title}</p>
+  {title && <p class="checkpoint-title">{title}</p>}
   <div class="checkpoint-body"><slot /></div>
 </aside>
