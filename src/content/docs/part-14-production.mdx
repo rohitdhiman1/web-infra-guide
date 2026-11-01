@@ -1,22 +1,79 @@
 ---
 title: "Part 14 — Deploying and operating nginx in production"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
+import Checkpoint from '../../components/content/Checkpoint.astro';
+
 Getting nginx running is easy. Changing it a hundred times a year without an outage is the real job. Plan one week.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-14-1" class="concept-num" href="#concept-14-1">14.1</a> Configuration as code.** Configs live in Git and are templated (Ansible with Jinja, Terraform plus cloud-init, or container images). Nobody hand-edits production.
-- **<a id="concept-14-2" class="concept-num" href="#concept-14-2">14.2</a> CI for configs.** Every change runs `nginx -t` in the same nginx version as production, plus a linter such as gixy for security mistakes like unsafe `alias` or missing `Host` checks. A failed check blocks the merge.
-- **<a id="concept-14-3" class="concept-num" href="#concept-14-3">14.3</a> nginx in containers.** The official image renders `/etc/nginx/templates/*.template` with environment variables at startup. Log to stdout and stderr. Prefer the unprivileged image variant, which runs as a non-root user on port 8080.
-- **<a id="concept-14-4" class="concept-num" href="#concept-14-4">14.4</a> nginx in Kubernetes.** Traffic enters the cluster through an Ingress or Gateway API controller. The community ingress-nginx project was retired in March 2026 and gets no more security fixes, so learn the Gateway API. F5's NGINX Ingress Controller and NGINX Gateway Fabric are separate, maintained projects; don't confuse them.
-- **<a id="concept-14-5" class="concept-num" href="#concept-14-5">14.5</a> Zero-downtime changes.** A reload (`nginx -s reload`) starts new workers and drains old ones, so it drops nothing. A restart drops connections. Releases are rolling, blue-green or canary, driven by upstream weights or load balancer target groups.
-- **<a id="concept-14-6" class="concept-num" href="#concept-14-6">14.6</a> Certificate lifecycle.** Renewal must be automatic, followed by a reload (certbot's `--deploy-hook`). Monitor expiry separately, because renewal jobs fail silently. With lifetimes shrinking ([5.11](/part-5-tls/#concept-5-11)), this is no longer optional.
-- **<a id="concept-14-7" class="concept-num" href="#concept-14-7">14.7</a> Logs in production.** Rotate with logrotate and `nginx -s reopen` (SIGUSR1), or ship stdout from containers. Use JSON logs ([12.1](/part-12-observability/#concept-12-1)) and sample very high-volume endpoints.
-- **<a id="concept-14-8" class="concept-num" href="#concept-14-8">14.8</a> Capacity limits.** Maximum connections is roughly `worker_processes` × `worker_connections`, and a proxied request uses two connections (client and upstream). Check file descriptor limits ([2.2](/part-2-linux/#concept-2-2)) against that number.
-- **<a id="concept-14-9" class="concept-num" href="#concept-14-9">14.9</a> Upgrades and patching.** Choose between nginx's mainline and stable branches, track security advisories, and patch OpenSSL as well. An upgrade is a rolling deploy like any other.
-- **<a id="concept-14-10" class="concept-num" href="#concept-14-10">14.10</a> Alternatives worth knowing.** HAProxy (load balancing focus), Envoy (service mesh, dynamic config), Caddy (automatic HTTPS), Traefik (container discovery). Knowing their trade-offs makes you better at nginx.
+<span id="concept-14-1"></span>
 
-**In the sandbox**
+### <span class="concept-badge">14.1</span> Configuration as code
+
+Configs live in Git and are templated (Ansible with Jinja, Terraform plus cloud-init, or container images). Nobody hand-edits production.
+
+<span id="concept-14-2"></span>
+
+### <span class="concept-badge">14.2</span> CI for configs
+
+Every change runs `nginx -t` in the same nginx version as production, plus a linter such as gixy for security mistakes like unsafe `alias` or missing `Host` checks. A failed check blocks the merge.
+
+<span id="concept-14-3"></span>
+
+### <span class="concept-badge">14.3</span> nginx in containers
+
+The official image renders `/etc/nginx/templates/*.template` with environment variables at startup. Log to stdout and stderr. Prefer the unprivileged image variant, which runs as a non-root user on port 8080.
+
+<span id="concept-14-4"></span>
+
+### <span class="concept-badge">14.4</span> nginx in Kubernetes
+
+Traffic enters the cluster through an Ingress or Gateway API controller. The community ingress-nginx project was retired in March 2026 and gets no more security fixes, so learn the Gateway API.
+
+F5's NGINX Ingress Controller and NGINX Gateway Fabric are separate, maintained projects; don't confuse them.
+
+<span id="concept-14-5"></span>
+
+### <span class="concept-badge">14.5</span> Zero-downtime changes
+
+A reload (`nginx -s reload`) starts new workers and drains old ones, so it drops nothing. A restart drops connections.
+
+Releases are rolling, blue-green or canary, driven by upstream weights or load balancer target groups.
+
+<span id="concept-14-6"></span>
+
+### <span class="concept-badge">14.6</span> Certificate lifecycle
+
+Renewal must be automatic, followed by a reload (certbot's `--deploy-hook`). Monitor expiry separately, because renewal jobs fail silently. With lifetimes shrinking ([5.11](/part-5-tls/#concept-5-11)), this is no longer optional.
+
+<span id="concept-14-7"></span>
+
+### <span class="concept-badge">14.7</span> Logs in production
+
+Rotate with logrotate and `nginx -s reopen` (SIGUSR1), or ship stdout from containers. Use JSON logs ([12.1](/part-12-observability/#concept-12-1)) and sample very high-volume endpoints.
+
+<span id="concept-14-8"></span>
+
+### <span class="concept-badge">14.8</span> Capacity limits
+
+Maximum connections is roughly `worker_processes` × `worker_connections`, and a proxied request uses two connections (client and upstream). Check file descriptor limits ([2.2](/part-2-linux/#concept-2-2)) against that number.
+
+<span id="concept-14-9"></span>
+
+### <span class="concept-badge">14.9</span> Upgrades and patching
+
+Choose between nginx's mainline and stable branches, track security advisories, and patch OpenSSL as well. An upgrade is a rolling deploy like any other.
+
+<span id="concept-14-10"></span>
+
+### <span class="concept-badge">14.10</span> Alternatives worth knowing
+
+HAProxy (load balancing focus), Envoy (service mesh, dynamic config), Caddy (automatic HTTPS), Traefik (container discovery). Knowing their trade-offs makes you better at nginx.
+
+## In the sandbox
 
 1. Put your nginx configs in Git with a CI job that runs `nginx -t` inside the official container and a linter on every pull request. Open a PR with a syntax error and watch it fail.
 2. Build a Docker image that uses the templates feature for the upstream address, running as non-root on port 8080.
@@ -25,4 +82,10 @@ Getting nginx running is easy. Changing it a hundred times a year without an out
 5. Set up certbot with a deploy hook that reloads nginx. Test it with `certbot renew --dry-run`, and add an expiry alarm using `openssl x509 -checkend 1209600` (14 days).
 6. Configure logrotate with `postrotate nginx -s reopen` and confirm no log lines are lost during rotation.
 
-**You've got it when** you can ship an nginx config change through a pull request, under load, with zero failed requests.
+## You've got it when
+
+<Checkpoint title="">
+
+You can ship an nginx config change through a pull request, under load, with zero failed requests.
+
+</Checkpoint>
