@@ -1,9 +1,13 @@
 ---
 title: "One hostname, three checks — DNS, TLS and nginx"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import HostnameChecks from '../../components/diagrams/HostnameChecks';
 
 When a browser opens `https://www.example.com`, three different systems check that same name, one after another. Most "works on one domain, breaks on another" bugs are one of these three checks failing.
+
+## The hostname simulator
 
 <HostnameChecks client:visible />
 
@@ -27,4 +31,6 @@ Click each hostname and predict which check fails before you look. The zone, cer
 
 > "First, DNS turns the name into an IP address, following any CNAMEs on the way. Then, during the TLS handshake, the browser sends the name as SNI, and the server must show a certificate whose SAN list includes that name. Finally, nginx reads the Host header and picks the `server` block whose `server_name` matches. Same name, three checks. When something breaks, find which of the three said no."
 
-**In the sandbox:** point an A record and a CNAME at a VM. Get one Let's Encrypt certificate covering two names, and set up two `server` blocks. Then break each check on purpose: request a name missing from the SANs, remove a `server_name`, and point the CNAME at the wrong target. Read the exact error each one produces with `curl -v`.
+## In the sandbox
+
+Point an A record and a CNAME at a VM. Get one Let's Encrypt certificate covering two names, and set up two `server` blocks. Then break each check on purpose: request a name missing from the SANs, remove a `server_name`, and point the CNAME at the wrong target. Read the exact error each one produces with `curl -v`.
