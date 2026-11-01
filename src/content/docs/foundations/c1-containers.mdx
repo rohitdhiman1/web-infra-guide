@@ -1,0 +1,308 @@
+---
+title: "C1 — Containers from the kernel up"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import StopTimeline from '../../../components/diagrams/StopTimeline.tsx';
+import ImageLayers from '../../../components/diagrams/ImageLayers.tsx';
+import JvmMemory from '../../../components/diagrams/JvmMemory.tsx';
+import NamespaceView from '../../../components/diagrams/NamespaceView.tsx';
+import CpuThrottle from '../../../components/diagrams/CpuThrottle.tsx';
+
+Containers feel like small virtual machines, but there's no virtual machine involved. A container is an ordinary Linux process that the kernel isolates and limits with features you met in Part 2. Once you see those features, Docker stops being magic, and questions like “why was my container OOM-killed?” or “why is latency bad at 40% CPU?” get exact answers. This module stays on one host: Kubernetes builds on exactly these pieces, and comes later.
+
+## What a container is
+
+:::note[Definition]
+A **container** is one or more ordinary Linux processes that the kernel gives a private view of the system with **namespaces**, limits with **cgroups**, and starts from a packaged filesystem called an **image**. It shares the host's kernel; nothing is emulated.
+:::
+
+| | Container | Virtual machine |
+|---|---|---|
+| What runs | Processes on the host's kernel | A whole guest operating system on virtual hardware |
+| Isolation comes from | Kernel features: namespaces, cgroups, capabilities, seccomp | A hypervisor |
+| Starts in | Milliseconds (it's a process start) | Seconds to minutes (it boots) |
+| Overhead | Close to none | A kernel and OS per VM |
+| Can run a different kernel | No: same kernel, any distribution's userland | Yes |
+| Isolation strength | Good; one kernel bug can break it | Stronger |
+
+## Concepts
+
+<span id="concept-c1-1"></span>
+
+### <span class="concept-badge">C1.1</span> A container is a process
+
+Start a container and look from the host: `ps -ef | grep java` shows your containerised app as a normal process, with a normal PID, owned by the container runtime. `uname -r` inside the container prints the *host's* kernel version, because there is only one kernel.
+
+Everything from Part 2 applies directly: file descriptors ([2.1](/part-2-linux/#concept-2-1)), limits, signals ([2.6](/part-2-linux/#concept-2-6)), epoll. The container just sees a filtered view of the system, and has fences around how much it can use.
+
+<Takeaway>
+A container is a process with a private view and resource limits, not a small virtual machine.
+</Takeaway>
+
+<span id="concept-c1-2"></span>
+
+### <span class="concept-badge">C1.2</span> Namespaces: a private view
+
+A **namespace** wraps one kind of global resource so that processes inside see their own copy. Each kind is separate, and a container normally gets all of them:
+
+| Namespace | Isolates | Inside the container you see |
+|---|---|---|
+| PID | Process ids | Your app as PID 1, and only your own processes |
+| Network | Interfaces, IPs, routes, ports, iptables | Your own `eth0`, IP and ports (module C2) |
+| Mount | The filesystem tree | The image's files as `/` |
+| UTS | Hostname | Your own hostname |
+| IPC | Shared memory, semaphores | Your own |
+| User | User and group ids | Root inside can map to an unprivileged id outside |
+| Cgroup | The cgroup hierarchy | Only your own cgroup |
+
+You can make one without Docker. `sudo unshare --pid --fork --mount-proc bash` starts a shell that believes it's PID 1. `lsns` lists the namespaces on a host, and `nsenter` joins one, which is how debugging tools get “inside” a container.
+
+<Takeaway>
+Namespaces decide what a process can see; each kind isolates one resource.
+</Takeaway>
+
+<span id="concept-c1-3"></span>
+
+### <span class="concept-badge">C1.3</span> cgroups: limits and accounting
+
+Namespaces control what a process *sees*; **control groups (cgroups)** control how much it can *use*. A cgroup is a group of processes with limits and counters for CPU, memory, number of processes and disk I/O. Modern distributions use **cgroup v2**: one tree under `/sys/fs/cgroup`, with one directory per group and plain files for each setting.
+
+| Docker flag | cgroup v2 file | Effect |
+|---|---|---|
+| `--cpus=1.5` | `cpu.max` → `150000 100000` | At most 150 ms of CPU time per 100 ms period |
+| `--memory=512m` | `memory.max` | Above it, the kernel reclaims memory, then kills a process |
+| `--pids-limit=200` | `pids.max` | No more than 200 processes or threads |
+| (always on) | `cpu.stat`, `memory.current`, `memory.events` | The counters monitoring tools read |
+
+`cat /sys/fs/cgroup/cpu.stat` inside a container shows `nr_throttled` and `throttled_usec`: the numbers behind the next concept.
+
+<Takeaway>
+cgroups decide how much a process can use, and they're plain files you can read.
+</Takeaway>
+
+<span id="concept-c1-4"></span>
+
+### <span class="concept-badge">C1.4</span> CPU limits and throttling
+
+A CPU limit isn't a slower CPU. It's a **budget per period**: `--cpus=1` allows 100 ms of CPU time every 100 ms, summed across *all* the container's threads. A single-threaded app never notices. But a service running 4 threads in parallel spends that 100 ms budget in 25 ms of wall-clock time, and then **the whole container is frozen** for the remaining 75 ms of the period.
+
+That's how a service shows 40% average CPU and terrible p99 latency at the same time: requests that happen to need CPU near the end of a period wait for the next one. Check `nr_throttled` in `cpu.stat`. If it keeps climbing, the limit is hurting you.
+
+Common fixes: raise the limit, or set none and rely on a CPU *share* (`--cpu-shares`) so the service can burst when the host is idle. Also cap the runtime's thread pools so it doesn't run more threads than its CPU budget.
+
+<Takeaway>
+A CPU limit is a time budget per 100 ms period; multithreaded apps burn it fast and then freeze.
+</Takeaway>
+
+<span id="concept-c1-5"></span>
+
+### <span class="concept-badge">C1.5</span> Memory limits and the OOM killer
+
+Memory works differently: there is no throttling. When a cgroup reaches `memory.max`, the kernel first reclaims what it can (file cache), and if that isn't enough, the **OOM killer** kills a process in that cgroup with `SIGKILL`. Docker reports **exit code 137**: 128 + signal 9.
+
+| Signal you see | Meaning |
+|---|---|
+| Exit code 137, `OOMKilled: true` in `docker inspect` | The container exceeded its memory limit |
+| `oom_kill` count rising in `memory.events` | Processes in this cgroup are being killed |
+| Exit code 137 *without* OOMKilled | Something else sent SIGKILL, often a `docker stop` that timed out (C1.9) |
+
+Page cache counts towards the limit too. A service that reads big files can look “full” while most of that memory is reclaimable cache.
+
+<Takeaway>
+At the memory limit nothing slows down: the kernel kills a process, and you see exit code 137.
+</Takeaway>
+
+<span id="concept-c1-6"></span>
+
+### <span class="concept-badge">C1.6</span> The JVM inside a container
+
+Since JDK 10 (and 8u191), the JVM reads its container's cgroup limits instead of the host's totals. Two defaults matter:
+
+| JVM decision | Default inside a container | Usually set |
+|---|---|---|
+| Maximum heap | **25%** of the container's memory limit | `-XX:MaxRAMPercentage=60` to `75` |
+| Available processors | Derived from the CPU limit (`--cpus=2` → 2) | Leave it, or `-XX:ActiveProcessorCount=N` |
+
+A 2 GB container therefore gets a 512 MB heap unless you change it, which is a common surprise. But don't give the heap 100%: metaspace, thread stacks, the JIT, and **direct buffers** (used heavily by Netty, Kafka clients and NIO) all live outside the heap. A heap that fills the limit leaves those nowhere to go, and the result is an OOM kill rather than a Java `OutOfMemoryError`.
+
+The processor count matters too: it sizes GC threads, the common `ForkJoinPool` and many frameworks' worker pools. That ties straight back to throttling in C1.4.
+
+<Takeaway>
+The JVM sizes its heap at 25% of the container limit by default; raise it, but leave room for memory outside the heap.
+</Takeaway>
+
+<JvmMemory client:visible />
+
+<span id="concept-c1-7"></span>
+
+### <span class="concept-badge">C1.7</span> Images, layers and overlayfs
+
+An **image** is a stack of read-only **layers** (tar archives of filesystem changes) plus a config: the command to run, environment, user, exposed ports. Each Dockerfile instruction that changes files adds a layer. The OCI image specification standardises the format, so images built with Docker run under containerd, Podman or Kubernetes.
+
+At run time, **overlayfs** stacks the layers into one view and adds a thin **writable layer** on top for the container. Changing a file copies it up into that layer first (copy-on-write). Delete the container and the writable layer goes with it.
+
+| Practice | Why |
+|---|---|
+| Put rarely-changing steps first (dependencies, then your code) | Layers are cached; a change rebuilds only the layers after it |
+| Use multi-stage builds | Compilers and build tools stay out of the final image |
+| Use small base images (slim, distroless) | Less to download, fewer vulnerable packages |
+| Deploy by **digest** (`image@sha256:…`), not just a tag | A tag like `latest` can point at different images over time |
+
+<Takeaway>
+An image is stacked read-only layers; a container adds one writable layer that disappears with it.
+</Takeaway>
+
+<ImageLayers client:visible />
+
+<span id="concept-c1-8"></span>
+
+### <span class="concept-badge">C1.8</span> The runtime stack
+
+`docker run` passes through several programs, each with one job:
+
+| Layer | Job |
+|---|---|
+| `docker` CLI | Sends your command to the daemon's API |
+| `dockerd` | Builds images, manages networks and volumes |
+| `containerd` | Pulls images, manages container lifecycles |
+| `containerd-shim` | Stays as the container's parent, so the daemons can restart without killing it |
+| `runc` | The OCI runtime: creates the namespaces and cgroup, then `exec`s your process, and exits |
+
+After that, your app runs as a normal process whose parent is the shim. Kubernetes talks to containerd directly, without dockerd, which is why “Kubernetes dropped Docker” didn't stop Docker-built images from running.
+
+<Takeaway>
+Docker is a stack: dockerd, containerd and a shim manage containers, and runc creates them with kernel calls.
+</Takeaway>
+
+<span id="concept-c1-9"></span>
+
+### <span class="concept-badge">C1.9</span> PID 1 and signals
+
+The first process in a PID namespace is PID 1, and the kernel treats PID 1 specially. Signals it hasn't installed a handler for are ignored, including `SIGTERM`. PID 1 also has to reap orphaned zombie processes. That causes two classic problems:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `docker stop` always takes 10 seconds, then exit 137 | The app never got `SIGTERM`, or ignores it as PID 1. A shell-form `CMD java -jar app.jar` runs under `/bin/sh -c`, and the shell may not pass signals on | Use the exec form `CMD ["java", "-jar", "app.jar"]`, `exec` the app at the end of an entrypoint script, and handle `SIGTERM` in the app |
+| Zombie processes pile up | The app spawns children but, as PID 1, never reaps them | Run with `docker run --init` (a tiny init, tini) |
+
+`docker stop` sends `SIGTERM`, waits 10 seconds, then sends `SIGKILL`. Getting `SIGTERM` to your app is what makes graceful shutdown ([4.12](/part-4-raw-servers/#concept-4-12)) possible at all.
+
+<Takeaway>
+Make sure SIGTERM reaches your app: use the exec form, or exec from the entrypoint.
+</Takeaway>
+
+<StopTimeline client:visible />
+
+<span id="concept-c1-10"></span>
+
+### <span class="concept-badge">C1.10</span> Security basics
+
+Containers share the kernel, so isolation is only as good as the settings around it.
+
+| Do | Why |
+|---|---|
+| Run as a non-root `USER` | By default, root in a container is root on the host (Docker doesn't remap users unless configured) |
+| Drop capabilities you don't need (`--cap-drop ALL`, then add back) | Root's powers are split into capabilities ([2.10](/part-2-linux/#concept-2-10)); most apps need none |
+| Use a read-only root filesystem (`--read-only`) | An attacker can't modify the app's files |
+| Never mount `/var/run/docker.sock` into an app | Access to the Docker socket is root on the host |
+| Keep the default seccomp profile, and never use `--privileged` for apps | The profile blocks dangerous system calls; `--privileged` turns everything off |
+
+<Takeaway>
+Run as non-root with no extra capabilities, and never hand a container the Docker socket.
+</Takeaway>
+
+<span id="concept-c1-11"></span>
+
+### <span class="concept-badge">C1.11</span> Storage and logs
+
+Anything written to the container's writable layer disappears with the container. Data that must survive goes in a **volume** (managed by Docker, under `/var/lib/docker/volumes`) or a **bind mount** (a host directory you choose). Volumes are the safer default. Bind mounts are handy in development, but they tie the container to one host's file layout.
+
+Logs should go to **stdout and stderr**, not files inside the container. Docker captures them (`docker logs`), and its logging driver ships them on. Set `max-size` on the default `json-file` driver, or one chatty container can fill the host's disk.
+
+<Takeaway>
+Containers are disposable: keep data in volumes and send logs to stdout.
+</Takeaway>
+
+## What a process sees
+
+Start with every namespace off: that's an ordinary process. Switch them on one at a time, and compare what the same command shows on the host and inside.
+
+<NamespaceView client:visible />
+
+## CPU throttling
+
+One request needs 200 ms of CPU time. Change the CPU limit and the number of threads working in parallel, and watch where the container is frozen.
+
+<CpuThrottle client:visible />
+
+## Try it on a Linux VM
+
+These need a Linux machine with Docker; any small cloud VM works.
+
+#### Namespaces without Docker
+
+```bash
+sudo unshare --pid --fork --mount-proc --uts bash
+hostname sandbox && hostname     # changes only inside
+ps -ef                           # you are PID 1
+exit
+lsns | head                      # namespaces on the host
+```
+
+#### A container is a process
+
+```bash
+docker run -d --name web nginx
+ps -ef | grep "nginx: master"                 # visible from the host
+PID=$(docker inspect -f '{{.State.Pid}}' web)
+sudo ls -l /proc/$PID/ns                      # its namespaces
+sudo nsenter -t $PID -n ip addr               # its network, seen from the host
+```
+
+#### Throttling and OOM kills
+
+```bash
+docker run --rm --cpus=0.5 --name burn alpine sh -c 'while :; do :; done' &
+docker exec burn cat /sys/fs/cgroup/cpu.stat  # nr_throttled keeps growing
+docker rm -f burn
+
+docker run --memory=64m --name hog alpine sh -c 'x=a; while :; do x=$x$x; done'
+docker inspect -f '{{.State.ExitCode}} {{.State.OOMKilled}}' hog    # usually: 137 true
+```
+
+#### The JVM's view of its limits
+
+```bash
+docker run --rm --memory=1g --cpus=2 eclipse-temurin:25 \
+  java -XX:+PrintFlagsFinal -version | grep -E 'MaxHeapSize|ActiveProcessorCount'
+```
+
+#### PID 1 ignores SIGTERM
+
+```bash
+docker run -d --name a alpine sleep 300
+time docker stop a        # about 10 s: sleep is PID 1, has no SIGTERM handler, so it's SIGKILLed
+
+docker run -d --init --name b alpine sleep 300
+time docker stop b        # instant: tini is PID 1 and forwards SIGTERM to sleep, which exits
+```
+
+The same 10-second stall happens to any app that doesn't handle `SIGTERM` as PID 1, or that never receives it because a shell sits in front of it.
+
+## You've got it when
+
+<Checkpoint>
+
+- Explain what a container is in kernel terms, and how it differs from a virtual machine.
+- Name the main namespaces and what each one isolates.
+- Explain why a multithreaded service can be throttled at 40% average CPU, and find the proof in `cpu.stat`.
+- Diagnose an exit code 137, and tell an OOM kill from a slow `docker stop`.
+- Size a JVM's heap for a given container memory limit, and say what else needs memory.
+- Explain image layers and copy-on-write, and order a Dockerfile for good caching.
+- Make a container shut down gracefully, and run it as non-root with no extra capabilities.
+
+</Checkpoint>
