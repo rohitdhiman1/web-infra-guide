@@ -94,6 +94,10 @@ stay exactly as written. So they follow the same look through the generator (`fo
   standalone bold labels become `##` sections, or `###` inside one of the guide's own sections. The
   self-check sentence goes in a `<Checkpoint title="">` box.
 
+- **Extra material** that isn't in the guide (such as the HTTP history timeline on Part 3) is added as a
+  component through `EXTRAS` in the generator. It's inserted after the page's opening paragraph and gets a
+  heading from `DIAGRAM_TITLES`, so the guide text itself never changes.
+
 To change how guide pages look, change the generator and re-run it. Never edit the generated `.mdx` files.
 
 ## Before a page is done
