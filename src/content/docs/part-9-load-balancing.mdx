@@ -1,30 +1,96 @@
 ---
 title: "Part 9 — Load balancing"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import LoadBalancing from '../../components/diagrams/LoadBalancing';
+import Checkpoint from '../../components/content/Checkpoint.astro';
 
 Load balancing is easy to set up and hard to get right under failure. Spend most of your lab time breaking backends on purpose. Plan one to two weeks.
+
+## Load balancing simulator
 
 <LoadBalancing client:visible />
 
 Try it: send a few requests, kill B, then send again. The first request that lands on B fails over to C, which is `proxy_next_upstream` at work. After that, B is skipped. Notice that C now takes two shares of traffic, which is why one dead server can overload its neighbours.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-9-1" class="concept-num" href="#concept-9-1">9.1</a> L4 vs L7 balancing.** Layer 4 balances TCP or UDP connections without reading HTTP (nginx `stream`, AWS NLB). Layer 7 reads HTTP and can route by path, header or cookie (nginx `http`, AWS ALB).
-- **<a id="concept-9-2" class="concept-num" href="#concept-9-2">9.2</a> The upstream block.** A named group of backend servers with per-server options: `weight`, `max_fails`, `fail_timeout`, `backup`, `down`, `max_conns`.
-- **<a id="concept-9-3" class="concept-num" href="#concept-9-3">9.3</a> Algorithms.** Round robin (default, weighted), `least_conn`, `ip_hash`, `hash $key consistent`, and `random two least_conn`. Know which fits stateless apps, long connections and caches.
-- **<a id="concept-9-4" class="concept-num" href="#concept-9-4">9.4</a> Consistent hashing.** Adding or removing a server remaps only a small share of keys. Essential when backends are caches.
-- **<a id="concept-9-5" class="concept-num" href="#concept-9-5">9.5</a> Session affinity (sticky sessions).** Pin a client to one backend via `ip_hash` or a cookie-based hash. Learn why it hurts balance, and why moving sessions into Redis or a database is usually better.
-- **<a id="concept-9-6" class="concept-num" href="#concept-9-6">9.6</a> Passive health checks.** Open-source nginx marks a server failed after `max_fails` errors within `fail_timeout`, then retries it later. It only notices failure when real traffic hits it.
-- **<a id="concept-9-7" class="concept-num" href="#concept-9-7">9.7</a> Active health checks.** Probing a `/health` endpoint on a schedule. This is nginx Plus only; open-source users rely on passive checks or the cloud load balancer's checks.
-- **<a id="concept-9-8" class="concept-num" href="#concept-9-8">9.8</a> Retries and proxy\_next\_upstream.** Which errors trigger a retry on another server (error, timeout, http\_502 and others). By default nginx won't retry non-idempotent requests like POST once they were sent, to avoid duplicate side effects.
-- **<a id="concept-9-9" class="concept-num" href="#concept-9-9">9.9</a> Retry storms.** Retries multiply load on an already struggling system. Cap them with `proxy_next_upstream_tries` and `proxy_next_upstream_timeout`.
-- **<a id="concept-9-10" class="concept-num" href="#concept-9-10">9.10</a> Dynamic backends and DNS.** nginx resolves upstream hostnames once at startup by default. That breaks with autoscaling or changing IPs. Fixes: a `resolver` with variables in `proxy_pass`, or the `resolve` server parameter, which arrived in open-source nginx in the 1.27 line.
-- **<a id="concept-9-11" class="concept-num" href="#concept-9-11">9.11</a> Connection draining.** Remove a backend gracefully: mark it `down`, reload, wait for in-flight requests, then stop it.
-- **<a id="concept-9-12" class="concept-num" href="#concept-9-12">9.12</a> Load balancer high availability.** nginx itself must not be a single point of failure. Options: two nginx nodes behind a cloud load balancer, DNS with several records, or a floating IP with keepalived.
+<span id="concept-9-1"></span>
 
-**In the sandbox**
+### <span class="concept-badge">9.1</span> L4 vs L7 balancing
+
+Layer 4 balances TCP or UDP connections without reading HTTP (nginx `stream`, AWS NLB). Layer 7 reads HTTP and can route by path, header or cookie (nginx `http`, AWS ALB).
+
+<span id="concept-9-2"></span>
+
+### <span class="concept-badge">9.2</span> The upstream block
+
+A named group of backend servers with per-server options: `weight`, `max_fails`, `fail_timeout`, `backup`, `down`, `max_conns`.
+
+<span id="concept-9-3"></span>
+
+### <span class="concept-badge">9.3</span> Algorithms
+
+Round robin (default, weighted), `least_conn`, `ip_hash`, `hash $key consistent`, and `random two least_conn`. Know which fits stateless apps, long connections and caches.
+
+<span id="concept-9-4"></span>
+
+### <span class="concept-badge">9.4</span> Consistent hashing
+
+Adding or removing a server remaps only a small share of keys. Essential when backends are caches.
+
+<span id="concept-9-5"></span>
+
+### <span class="concept-badge">9.5</span> Session affinity (sticky sessions)
+
+Pin a client to one backend via `ip_hash` or a cookie-based hash. Learn why it hurts balance, and why moving sessions into Redis or a database is usually better.
+
+<span id="concept-9-6"></span>
+
+### <span class="concept-badge">9.6</span> Passive health checks
+
+Open-source nginx marks a server failed after `max_fails` errors within `fail_timeout`, then retries it later. It only notices failure when real traffic hits it.
+
+<span id="concept-9-7"></span>
+
+### <span class="concept-badge">9.7</span> Active health checks
+
+Probing a `/health` endpoint on a schedule. This is nginx Plus only; open-source users rely on passive checks or the cloud load balancer's checks.
+
+<span id="concept-9-8"></span>
+
+### <span class="concept-badge">9.8</span> Retries and proxy\_next\_upstream
+
+Which errors trigger a retry on another server (error, timeout, http\_502 and others). By default nginx won't retry non-idempotent requests like POST once they were sent, to avoid duplicate side effects.
+
+<span id="concept-9-9"></span>
+
+### <span class="concept-badge">9.9</span> Retry storms
+
+Retries multiply load on an already struggling system. Cap them with `proxy_next_upstream_tries` and `proxy_next_upstream_timeout`.
+
+<span id="concept-9-10"></span>
+
+### <span class="concept-badge">9.10</span> Dynamic backends and DNS
+
+nginx resolves upstream hostnames once at startup by default. That breaks with autoscaling or changing IPs.
+
+Fixes: a `resolver` with variables in `proxy_pass`, or the `resolve` server parameter, which arrived in open-source nginx in the 1.27 line.
+
+<span id="concept-9-11"></span>
+
+### <span class="concept-badge">9.11</span> Connection draining
+
+Remove a backend gracefully: mark it `down`, reload, wait for in-flight requests, then stop it.
+
+<span id="concept-9-12"></span>
+
+### <span class="concept-badge">9.12</span> Load balancer high availability
+
+nginx itself must not be a single point of failure. Options: two nginx nodes behind a cloud load balancer, DNS with several records, or a floating IP with keepalived.
+
+## In the sandbox
 
 1. Launch three backend VMs, each returning its own hostname. Put nginx in front and run `for i in $(seq 20); do curl -s http://<lb>/; done` for each algorithm.
 2. Set weights 5:1:1 and verify the split with a 1,000-request loop.
@@ -33,4 +99,10 @@ Try it: send a few requests, kill B, then send again. The first request that lan
 5. Make one backend slow (add a 2-second sleep) and compare round robin with `least_conn`.
 6. Build the same setup with an AWS ALB or GCP load balancer in front of two nginx nodes. Compare its health checks with nginx's.
 
-**You've got it when** you can kill any single machine in your setup, including one nginx node, and users see no errors.
+## You've got it when
+
+<Checkpoint title="">
+
+You can kill any single machine in your setup, including one nginx node, and users see no errors.
+
+</Checkpoint>
