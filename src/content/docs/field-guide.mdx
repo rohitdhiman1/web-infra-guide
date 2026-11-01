@@ -1,5 +1,7 @@
 ---
 title: "Field guide — where to start looking when something breaks"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import DebuggingFlow from '../../components/diagrams/DebuggingFlow';
 
@@ -12,6 +14,8 @@ You're right: reading logs alone doesn't make someone senior. What does is formi
 3. **Test hop by hop.** Run the same request from the client, from the nginx host, then from the app host. The hop where it starts working is where the fault lives.
 4. **Ask what changed.** A deploy, a certificate renewal, a DNS edit, a security group change, a traffic spike. Most incidents follow a change.
 5. **Change one thing at a time,** and predict the result before you look.
+
+### Debugging flow
 
 <DebuggingFlow client:visible />
 
