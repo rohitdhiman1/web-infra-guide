@@ -1,30 +1,96 @@
 ---
 title: "Part 4 — Building raw web servers"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import ConcurrencySimulator from '../../components/diagrams/ConcurrencySimulator';
+import Checkpoint from '../../components/content/Checkpoint.astro';
 
 This is the part that turns knowledge into intuition. You build a server with nothing but sockets, and evolve it through each concurrency model nginx and the frameworks chose between. Plan two to three weeks. Python is fine; Go or C teach even more if you know them.
+
+## Concurrency simulator
 
 <ConcurrencySimulator client:visible />
 
 Pick a model, then add slow clients. This is exactly what your v1, v4 and v5 servers will do in the lab, and why nginx is built on an event loop ([4.8](#concept-4-8), [4.9](#concept-4-9)).
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-4-1" class="concept-num" href="#concept-4-1">4.1</a> The accept loop.** `socket()` → `bind()` → `listen()` → loop on `accept()` → `recv()` → parse → `send()` → `close()`. Every web server is an elaboration of this.
-- **<a id="concept-4-2" class="concept-num" href="#concept-4-2">4.2</a> TCP is a stream, not messages.** One `recv` may hold half a request or two requests. You must buffer until you see `\r\n\r\n`, then read exactly `Content-Length` more bytes.
-- **<a id="concept-4-3" class="concept-num" href="#concept-4-3">4.3</a> Parsing defensively.** Cap header size, line length and body size. Reject malformed input with a 400. Real servers are mostly hardening code.
-- **<a id="concept-4-4" class="concept-num" href="#concept-4-4">4.4</a> Timeouts.** A client that connects and never sends (Slowloris) will tie up your server forever without read timeouts. nginx has `client_header_timeout` for exactly this.
-- **<a id="concept-4-5" class="concept-num" href="#concept-4-5">4.5</a> Iterative (single-threaded blocking) server.** Handles one client at a time. One slow client stalls everyone.
-- **<a id="concept-4-6" class="concept-num" href="#concept-4-6">4.6</a> Thread-per-connection and process-per-connection.** Simple and works well up to a few hundred clients. Memory and context switching cost grow with each connection. Apache's prefork and worker modes live here.
-- **<a id="concept-4-7" class="concept-num" href="#concept-4-7">4.7</a> Pre-fork and worker pools.** Create workers up front instead of per request. Gunicorn's sync workers use this model.
-- **<a id="concept-4-8" class="concept-num" href="#concept-4-8">4.8</a> Event-driven servers.** One thread, non-blocking sockets, an epoll loop and a state machine per connection. This is nginx's model, and also Node.js and Python's asyncio.
-- **<a id="concept-4-9" class="concept-num" href="#concept-4-9">4.9</a> The C10k problem.** The historic challenge of handling 10,000 concurrent connections on one machine. It is why event-driven servers won for proxies.
-- **<a id="concept-4-10" class="concept-num" href="#concept-4-10">4.10</a> Static file serving.** Map URL paths to files, set `Content-Type` from the extension, and stream large files. Block path traversal like `/../../etc/passwd`.
-- **<a id="concept-4-11" class="concept-num" href="#concept-4-11">4.11</a> Keep-alive in your server.** Loop on the same connection for the next request, with an idle timeout. Watch how much it cuts latency.
-- **<a id="concept-4-12" class="concept-num" href="#concept-4-12">4.12</a> Graceful shutdown.** Stop accepting new connections, finish in-flight requests, then exit. Production deploys depend on this.
+<span id="concept-4-1"></span>
 
-**In the sandbox** (build these in order, each as its own file)
+### <span class="concept-badge">4.1</span> The accept loop
+
+`socket()` → `bind()` → `listen()` → loop on `accept()` → `recv()` → parse → `send()` → `close()`. Every web server is an elaboration of this.
+
+<span id="concept-4-2"></span>
+
+### <span class="concept-badge">4.2</span> TCP is a stream, not messages
+
+One `recv` may hold half a request or two requests. You must buffer until you see `\r\n\r\n`, then read exactly `Content-Length` more bytes.
+
+<span id="concept-4-3"></span>
+
+### <span class="concept-badge">4.3</span> Parsing defensively
+
+Cap header size, line length and body size. Reject malformed input with a 400. Real servers are mostly hardening code.
+
+<span id="concept-4-4"></span>
+
+### <span class="concept-badge">4.4</span> Timeouts
+
+A client that connects and never sends (Slowloris) will tie up your server forever without read timeouts. nginx has `client_header_timeout` for exactly this.
+
+<span id="concept-4-5"></span>
+
+### <span class="concept-badge">4.5</span> Iterative (single-threaded blocking) server
+
+Handles one client at a time. One slow client stalls everyone.
+
+<span id="concept-4-6"></span>
+
+### <span class="concept-badge">4.6</span> Thread-per-connection and process-per-connection
+
+Simple and works well up to a few hundred clients. Memory and context switching cost grow with each connection. Apache's prefork and worker modes live here.
+
+<span id="concept-4-7"></span>
+
+### <span class="concept-badge">4.7</span> Pre-fork and worker pools
+
+Create workers up front instead of per request. Gunicorn's sync workers use this model.
+
+<span id="concept-4-8"></span>
+
+### <span class="concept-badge">4.8</span> Event-driven servers
+
+One thread, non-blocking sockets, an epoll loop and a state machine per connection. This is nginx's model, and also Node.js and Python's asyncio.
+
+<span id="concept-4-9"></span>
+
+### <span class="concept-badge">4.9</span> The C10k problem
+
+The historic challenge of handling 10,000 concurrent connections on one machine. It is why event-driven servers won for proxies.
+
+<span id="concept-4-10"></span>
+
+### <span class="concept-badge">4.10</span> Static file serving
+
+Map URL paths to files, set `Content-Type` from the extension, and stream large files. Block path traversal like `/../../etc/passwd`.
+
+<span id="concept-4-11"></span>
+
+### <span class="concept-badge">4.11</span> Keep-alive in your server
+
+Loop on the same connection for the next request, with an idle timeout. Watch how much it cuts latency.
+
+<span id="concept-4-12"></span>
+
+### <span class="concept-badge">4.12</span> Graceful shutdown
+
+Stop accepting new connections, finish in-flight requests, then exit. Production deploys depend on this.
+
+## In the sandbox
+
+(build these in order, each as its own file)
 
 1. **v1:** a blocking server with Python's `socket` module that returns "Hello" for any request. Test with curl and a browser.
 2. **v2:** parse the request line and headers properly; route `/` and `/health`; return 404 otherwise.
@@ -33,4 +99,10 @@ Pick a model, then add slow clients. This is exactly what your v1, v4 and v5 ser
 5. **v5:** rewrite as an event loop with the `selectors` module (epoll under the hood). No threads.
 6. **Benchmark each version** from a second VM with `wrk -t2 -c200 -d30s http://<ip>:8080/`. Then point slow clients at it (a script that sends one header byte every 10 seconds) and see which versions survive.
 
-**You've got it when** your event-loop version handles hundreds of concurrent connections, and you can explain from your own benchmark numbers why it beats v1.
+## You've got it when
+
+<Checkpoint title="">
+
+Your event-loop version handles hundreds of concurrent connections, and you can explain from your own benchmark numbers why it beats v1.
+
+</Checkpoint>
