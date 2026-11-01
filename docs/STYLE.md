@@ -97,7 +97,9 @@ stay exactly as written. So they follow the same look through the generator (`fo
 - **Extra material** that isn't in the guide is added as a component through `EXTRAS` in the generator, so
   the guide text itself never changes. With `after: 'lead'` it goes after the opening paragraph, under a heading
   from `DIAGRAM_TITLES` (the HTTP timeline on Part 3). With `after: '2.7'` it goes inside that concept's section,
-  with no extra heading (the four Part 2 diagrams).
+  with no extra heading (the four Part 2 diagrams). Add `partial: true` to place static MDX from
+  `src/components/content/` there instead of a diagram (the OSI section in Part 1.1). With `before: 'Heading'`
+  and `heading: '…'`, a partial goes in as its own section before that heading (Beyond the 15 parts).
 
 To change how guide pages look, change the generator and re-run it. Never edit the generated `.mdx` files.
 

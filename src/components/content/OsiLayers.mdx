@@ -1,0 +1,36 @@
+{/* Inserted into concept 1.1 on Part 1 by scripts/split-guide.mjs (EXTRAS). Not part of source/guide.md. */}
+
+<span id="osi-layers"></span>
+
+#### OSI's seven layers, and the ones that actually run
+
+You'll hear layers named by number: "a layer 4 problem", "an L7 load balancer". The numbers come from the **OSI model**, a seven-layer reference model ISO published in 1984. The protocols designed for it mostly never caught on. The internet runs the **TCP/IP model** (RFC 1122), which has four layers, and the OSI numbers survived as vocabulary.
+
+Here is how the two line up on a real HTTPS request. Switch the [layer diagram](#the-layer-model) between OSI and TCP/IP to see the same thing.
+
+| OSI | Name | TCP/IP layer | What does that job | Own header on the wire? |
+|---|---|---|---|---|
+| 7 | Application | Application | HTTP | Yes: text headers |
+| 6 | Presentation | Application | TLS encryption; gzip and JSON inside HTTP | No. TLS, which does this job, adds a 5-byte record header |
+| 5 | Session | Application | TLS session resumption; cookies and HTTP/2 streams | No |
+| 4 | Transport | Transport | TCP or UDP | Yes: 20 to 60 bytes (UDP: 8) |
+| 3 | Network | Internet | IP | Yes: 20 bytes (IPv6: 40) |
+| 2 | Data link | Link | Ethernet or Wi-Fi | Yes: 14 bytes, plus a 4-byte checksum |
+| 1 | Physical | Link | The signal on copper, fibre or radio | No: it is the signal |
+
+So there are seven layers on paper and four or five on the wire. Capture an HTTPS request with `tcpdump` and you see an Ethernet frame holding an IP packet holding a TCP segment, and inside that, TLS records wrapping HTTP. Nothing else.
+
+#### Where layers 5 and 6 went
+
+Their jobs didn't disappear; no separate protocol does them. TLS encrypts (a presentation job) and resumes sessions (a session job). HTTP compresses bodies, carries cookies and, in HTTP/2, multiplexes streams over one connection. That's why TLS has no clean OSI number: you'll hear "layer 6", "layer 4.5" or just "TLS". [QUIC](/part-6-http2-http3/) blurs the lines further: it's a transport protocol that runs in user space on top of UDP, with TLS 1.3 built in.
+
+#### The numbers you'll hear
+
+| Phrase | What it means | Examples |
+|---|---|---|
+| L2 | The same local network, addressed by MAC | Switches, VLANs, ARP, the bridges and veth pairs in [C2](/foundations/c2-container-networking/) |
+| L3 | IP routing between networks | Routers, route tables, NACLs, `ping` |
+| L4 | Connections and ports, without reading HTTP | Security groups, AWS NLB, nginx `stream`, Kubernetes Services through iptables or IPVS |
+| L7 | Reads HTTP | AWS ALB, nginx `http`, WAFs, API gateways |
+
+An L4 load balancer can pass TLS straight through to the backend, but it can't route by path because it never sees one. An L7 load balancer has to terminate TLS to read HTTP, and then it can route by host, path, header or cookie ([Part 9, concept 9.1](/part-9-load-balancing/#concept-9-1)).

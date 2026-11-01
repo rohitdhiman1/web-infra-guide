@@ -11,8 +11,46 @@ import ImageLayers from '../../../components/diagrams/ImageLayers.tsx';
 import JvmMemory from '../../../components/diagrams/JvmMemory.tsx';
 import NamespaceView from '../../../components/diagrams/NamespaceView.tsx';
 import CpuThrottle from '../../../components/diagrams/CpuThrottle.tsx';
+import DeployEras from '../../../components/diagrams/DeployEras.tsx';
+import ContainerTimeline from '../../../components/content/ContainerTimeline.astro';
 
 Containers feel like small virtual machines, but there's no virtual machine involved. A container is an ordinary Linux process that the kernel isolates and limits with features you met in Part 2. Once you see those features, Docker stops being magic, and questions like “why was my container OOM-killed?” or “why is latency bad at 40% CPU?” get exact answers. This module stays on one host: Kubernetes builds on exactly these pieces, and comes later.
+
+## Why containers exist
+
+Before containers, deploying an app meant installing it on a server someone had set up by hand. The same four problems kept coming back:
+
+| Problem | What it looked like |
+|---|---|
+| “It works on my machine” | Your laptop has Java 21, staging has Java 17, and production is missing a system library. Same code, different environment. |
+| Version conflicts | One app needs OpenSSL 1.1 and another needs 3.0. A server has one system default, so each app ended up with a server of its own. |
+| Snowflake servers | Servers changed by hand for years until nobody could rebuild them. A deploy changed a live machine, and a half-finished one left it broken. |
+| Heavy virtual machines | VMs fixed the conflicts, but every app carried a whole operating system: gigabytes of disk, its own kernel in memory, a slow boot. |
+
+Switch between the four ways of running the same three apps, or use the arrow keys.
+
+<DeployEras client:visible />
+
+#### The idea: ship the environment with the code
+
+A container **image** bundles an app with everything it needs to run: the language runtime, the libraries, default config. It's built once, versioned, and never changed afterwards. The image you tested is the exact one production runs, and deploying means starting new containers and stopping old ones, not editing a live machine.
+
+The isolation comes from the kernel the host already runs, not from a guest operating system, so it costs almost nothing. A container starts as fast as a process, and dozens fit on one host.
+
+#### How we got here
+
+<ContainerTimeline />
+
+Docker didn't invent the isolation: most of it was in the Linux kernel before Docker existed. What Docker added was packaging: an image format, a registry to share images, and a command line simple enough that every developer used it. That's what changed how software ships.
+
+#### What containers don't solve
+
+- **Isolation as strong as a VM's.** Every container shares one kernel, so a kernel bug can become a way out ([C1.10](#concept-c1-10)). Platforms that run untrusted code add a stronger boundary, such as gVisor or Firecracker microVMs.
+- **The kernel.** It isn't in the image. The host's kernel version and settings apply to every container on it.
+- **Running a fleet.** Placing containers on machines, restarting them when they die and routing traffic to them is an orchestrator's job: Kubernetes.
+- **Data.** A container's own files go when the container does, so data that must survive needs a volume ([C1.11](#concept-c1-11)).
+
+In one line: containers solve packaging and density, so the same artefact runs everywhere with almost no overhead, and the price is isolation that's good but weaker than a VM's.
 
 ## What a container is
 
@@ -297,6 +335,7 @@ The same 10-second stall happens to any app that doesn't handle `SIGTERM` as PID
 
 <Checkpoint>
 
+- Explain what problems containers solve, what they don't, and why Docker's contribution was packaging.
 - Explain what a container is in kernel terms, and how it differs from a virtual machine.
 - Name the main namespaces and what each one isolates.
 - Explain why a multithreaded service can be throttled at 40% average CPU, and find the proof in `cpu.stat`.

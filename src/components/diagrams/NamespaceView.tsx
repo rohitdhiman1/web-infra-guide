@@ -52,7 +52,7 @@ function views(on: Record<Ns, boolean>): View[] {
     },
     {
       cmd: 'id',
-      host: 'uid=1000(rohit)',
+      host: 'uid=1000(dev)',
       inside: on.user ? 'uid=0(root)   …which is uid 100000 on the host' : 'uid=0(root)   …which is root on the host too',
       explain: on.user
         ? 'A user namespace maps root inside to an unprivileged id outside, so escaping the container doesn’t make you root. Docker doesn’t do this by default; rootless Docker and Podman do.'

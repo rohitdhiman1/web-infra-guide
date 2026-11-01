@@ -1,0 +1,100 @@
+---
+// A small horizontal timeline for C1's "Why containers exist". Static: no JavaScript.
+const EVENTS = [
+  { year: '1979', name: 'chroot', text: 'A process gets its own root directory. Files only.' },
+  { year: '2000', name: 'FreeBSD jails', text: 'Files, processes and network isolated together.' },
+  { year: '2005', name: 'Solaris Zones', text: 'Isolation plus resource limits, in a commercial Unix.' },
+  { year: '2008', name: 'cgroups and LXC', text: 'Google’s resource limits reach Linux; LXC joins them to namespaces.' },
+  { year: '2013', name: 'Docker', text: 'Images, a registry and one simple CLI: packaging, not new isolation.', key: true },
+  { year: '2014', name: 'Kubernetes', text: 'Runs containers across a fleet, from Google’s Borg experience.' },
+  { year: '2015', name: 'OCI', text: 'Open standards for images and runtimes: any tool runs any image.' },
+];
+---
+
+<div class="ctl not-content" tabindex="0" role="region" aria-label="Container history, 1979 to 2015 (scrolls sideways)">
+  <ol>
+    {
+      EVENTS.map((e) => (
+        <li class:list={{ 'is-key': e.key }}>
+          <span class="ctl-year">{e.year}</span>
+          <span class="ctl-dot" aria-hidden="true" />
+          <strong class="ctl-name">{e.name}</strong>
+          <span class="ctl-text">{e.text}</span>
+        </li>
+      ))
+    }
+  </ol>
+</div>
+
+<style>
+  .ctl {
+    margin: 1.25rem 0;
+    overflow-x: auto;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.75rem;
+    background: var(--sl-color-bg-nav);
+    scroll-snap-type: x proximity;
+  }
+  .ctl:focus-visible {
+    outline: 2px solid var(--sl-color-text-accent);
+    outline-offset: 2px;
+  }
+  ol {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(8.5rem, 1fr));
+    margin: 0;
+    padding: 1rem 0.5rem 0.9rem;
+    list-style: none;
+    position: relative;
+  }
+  /* The line the dots sit on. */
+  ol::before {
+    content: '';
+    position: absolute;
+    left: 1rem;
+    right: 1rem;
+    top: 2.85rem;
+    height: 2px;
+    background: var(--sl-color-hairline);
+  }
+  li {
+    display: grid;
+    justify-items: center;
+    align-content: start;
+    gap: 0.3rem;
+    /* Beat the docs' "li + li" spacing, which would push every item but the first down. */
+    margin: 0 !important;
+    padding: 0 0.4rem;
+    text-align: center;
+    scroll-snap-align: start;
+    font-size: var(--sl-text-xs);
+    line-height: 1.4;
+  }
+  .ctl-year {
+    font-weight: 700;
+    color: var(--sl-color-gray-3);
+  }
+  .ctl-dot {
+    position: relative;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    background: var(--sl-color-bg-nav);
+    border: 2px solid var(--sl-color-gray-3);
+  }
+  .ctl-name {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+  }
+  .ctl-text {
+    color: var(--sl-color-gray-2);
+  }
+  .is-key .ctl-year,
+  .is-key .ctl-name {
+    color: var(--sl-color-text-accent);
+  }
+  .is-key .ctl-dot {
+    background: var(--sl-color-text-accent);
+    border-color: var(--sl-color-text-accent);
+  }
+</style>

@@ -4,6 +4,7 @@ tableOfContents:
   maxHeadingLevel: 3
 ---
 import LoadBalancing from '../../components/diagrams/LoadBalancing';
+import LayerNumbers from '../../components/content/LayerNumbers.mdx';
 import Checkpoint from '../../components/content/Checkpoint.astro';
 
 Load balancing is easy to set up and hard to get right under failure. Spend most of your lab time breaking backends on purpose. Plan one to two weeks.
@@ -21,6 +22,8 @@ Try it: send a few requests, kill B, then send again. The first request that lan
 ### <span class="concept-badge">9.1</span> L4 vs L7 balancing
 
 Layer 4 balances TCP or UDP connections without reading HTTP (nginx `stream`, AWS NLB). Layer 7 reads HTTP and can route by path, header or cookie (nginx `http`, AWS ALB).
+
+<LayerNumbers />
 
 <span id="concept-9-2"></span>
 

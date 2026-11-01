@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from 'react';
 import DiagramFrame from './DiagramFrame';
-import { Switch } from './shared';
+import { Switch, ToggleGroup } from './shared';
 
-type LayerId = 'http' | 'tls' | 'tcp' | 'ip';
+type LayerId = 'eth' | 'ip' | 'tcp' | 'tls' | 'http';
+type Model = 'osi' | 'tcpip';
 
 interface Layer {
   id: LayerId;
@@ -10,6 +11,11 @@ interface Layer {
   role: string;
   /** What the envelope carries in the packet strip. */
   header: string;
+  /** How much each layer adds to the packet. */
+  bytes: string;
+  /** Its number in the OSI model, and its layer in the TCP/IP model. */
+  osi: string;
+  tcpip: { num: number; name: string };
   does: ReactNode;
   tool: ReactNode;
   fails: ReactNode;
@@ -19,10 +25,35 @@ interface Layer {
 // Outermost first, as the envelopes nest.
 const LAYERS: Layer[] = [
   {
+    id: 'eth',
+    name: 'Ethernet',
+    role: 'link (one hop)',
+    header: 'dst MAC 02:42:ac:11:00:02 · type IPv4',
+    bytes: '14-byte header and a 4-byte checksum (Wi-Fi uses its own frame)',
+    osi: '2',
+    tcpip: { num: 1, name: 'link' },
+    does: (
+      <>
+        Carries the frame across one local network to the next device: your router, a switch, a container bridge. Routers replace this envelope at
+        every hop; the IP envelope inside travels end to end.
+      </>
+    ),
+    tool: (
+      <>
+        <code>ip link</code>, <code>ip neigh</code>, <code>tcpdump -e</code>
+      </>
+    ),
+    fails: <>The link is down, the host is on the wrong VLAN, or ARP can't find the MAC address of the next hop.</>,
+    signature: 'Destination Host Unreachable · NO-CARRIER',
+  },
+  {
     id: 'ip',
     name: 'IP',
     role: 'routing packets',
     header: 'src 10.0.0.5 → dst 203.0.113.10',
+    bytes: '20-byte header (IPv6: 40)',
+    osi: '3',
+    tcpip: { num: 2, name: 'internet' },
     does: <>Carries each packet from one address to another, hop by hop across routers, NAT and firewalls.</>,
     tool: (
       <>
@@ -37,6 +68,9 @@ const LAYERS: Layer[] = [
     name: 'TCP',
     role: 'transport',
     header: 'port 51514 → 443 · seq 1,201',
+    bytes: '20 to 60-byte header (UDP: 8)',
+    osi: '4',
+    tcpip: { num: 3, name: 'transport' },
     does: <>Turns packets into a reliable, ordered byte stream between two ports, with retransmission and flow control.</>,
     tool: (
       <>
@@ -51,6 +85,9 @@ const LAYERS: Layer[] = [
     name: 'TLS',
     role: 'security',
     header: 'TLS 1.3 record · encrypted',
+    bytes: '5-byte record header and 17 bytes at the end of each record',
+    osi: '5–6',
+    tcpip: { num: 4, name: 'application' },
     does: <>Encrypts the stream and proves the server's identity with a certificate chain.</>,
     tool: (
       <>
@@ -65,6 +102,9 @@ const LAYERS: Layer[] = [
     name: 'HTTP',
     role: 'application',
     header: 'GET /cart HTTP/1.1 · Host: shop.example.com',
+    bytes: 'text headers, often a few hundred bytes',
+    osi: '7',
+    tcpip: { num: 4, name: 'application' },
     does: <>The request and response your app actually sees: method, path, headers, status code and body.</>,
     tool: (
       <>
@@ -76,13 +116,60 @@ const LAYERS: Layer[] = [
   },
 ];
 
+interface ModelRow {
+  num: string;
+  name: string;
+  /** What fills this layer on a real HTTPS request. */
+  what: string;
+  /** The envelopes that do this layer's work; empty when nothing on the wire belongs to it. */
+  layers: LayerId[];
+  /** True when the layer adds no header of its own. */
+  noHeader?: boolean;
+}
+
+const MODELS: Record<Model, { caption: ReactNode; rows: ModelRow[] }> = {
+  osi: {
+    caption: (
+      <>
+        <strong>OSI: 7 layers on paper.</strong> Only 2, 3, 4 and 7 have a protocol of their own on the wire. TLS does most of the work of 5 and 6,
+        and layer 1 is the signal itself.
+      </>
+    ),
+    rows: [
+      { num: '7', name: 'Application', what: 'HTTP', layers: ['http'] },
+      { num: '6', name: 'Presentation', what: 'TLS encryption; gzip and JSON inside HTTP', layers: ['tls'], noHeader: true },
+      { num: '5', name: 'Session', what: 'TLS session resumption; cookies and HTTP/2 streams', layers: ['tls'], noHeader: true },
+      { num: '4', name: 'Transport', what: 'TCP or UDP', layers: ['tcp'] },
+      { num: '3', name: 'Network', what: 'IP', layers: ['ip'] },
+      { num: '2', name: 'Data link', what: 'Ethernet or Wi-Fi', layers: ['eth'] },
+      { num: '1', name: 'Physical', what: 'the signal on copper, fibre or radio', layers: [], noHeader: true },
+    ],
+  },
+  tcpip: {
+    caption: (
+      <>
+        <strong>TCP/IP: 4 layers, the model the internet runs</strong> (RFC 1122). TLS has no layer of its own here; it sits at the bottom of the
+        application layer.
+      </>
+    ),
+    rows: [
+      { num: '4', name: 'Application', what: 'HTTP, carried inside TLS', layers: ['http', 'tls'] },
+      { num: '3', name: 'Transport', what: 'TCP or UDP', layers: ['tcp'] },
+      { num: '2', name: 'Internet', what: 'IP', layers: ['ip'] },
+      { num: '1', name: 'Link', what: 'Ethernet or Wi-Fi, and the signal itself', layers: ['eth'] },
+    ],
+  },
+};
+
 export default function LayerModel() {
   const [sel, setSel] = useState<LayerId>('tcp');
   const [broken, setBroken] = useState(false);
+  const [model, setModel] = useState<Model>('osi');
   const layer = LAYERS.find((l) => l.id === sel)!;
   const selIndex = LAYERS.indexOf(layer);
+  const num = (l: Layer) => (model === 'osi' ? l.osi : String(l.tcpip.num));
 
-  // Render the envelopes recursively: IP contains TCP contains TLS contains HTTP.
+  // Render the envelopes recursively: Ethernet contains IP contains TCP contains TLS contains HTTP.
   const envelope = (i: number): ReactNode => {
     if (i >= LAYERS.length) return null;
     const l = LAYERS[i];
@@ -104,7 +191,7 @@ export default function LayerModel() {
   return (
     <DiagramFrame
       title="The layer model"
-      subtitle="4 layers, the tool for each, how each fails"
+      subtitle="5 envelopes on the wire, the tool for each, how each fails"
       status={
         <div className="dg-detail">
           <div>
@@ -114,6 +201,12 @@ export default function LayerModel() {
             {layer.does}
           </div>
           <dl>
+            <dt>Layer</dt>
+            <dd>
+              OSI layer {layer.osi} · TCP/IP {layer.tcpip.name} layer
+            </dd>
+            <dt>Adds</dt>
+            <dd>{layer.bytes}</dd>
             <dt>First tool</dt>
             <dd>{layer.tool}</dd>
             <dt>How it fails</dt>
@@ -131,11 +224,26 @@ export default function LayerModel() {
           )}
         </div>
       }
-      controls={<Switch checked={broken} onChange={setBroken}>Damage this envelope</Switch>}
+      controls={
+        <>
+          <ToggleGroup
+            label="Numbering"
+            value={model}
+            onChange={setModel}
+            options={[
+              { value: 'osi', label: 'OSI (7 layers)' },
+              { value: 'tcpip', label: 'TCP/IP (4 layers)' },
+            ]}
+          />
+          <Switch checked={broken} onChange={setBroken}>
+            Damage this envelope
+          </Switch>
+        </>
+      }
     >
       <div className="lm">
         <div className="lm-layers" role="group" aria-label="Choose a layer">
-          {[...LAYERS].reverse().map((l, i) => (
+          {[...LAYERS].reverse().map((l) => (
             <button
               key={l.id}
               type="button"
@@ -143,7 +251,7 @@ export default function LayerModel() {
               aria-pressed={sel === l.id}
               onClick={() => setSel(l.id)}
             >
-              <span className="lm-num">{4 - i}</span>
+              <span className="lm-num">{num(l)}</span>
               <span className="lm-btn-text">
                 <strong>{l.name}</strong>
                 <span>{l.role}</span>
@@ -154,6 +262,28 @@ export default function LayerModel() {
         <div className="lm-packet" aria-hidden="true">
           <div className="lm-caption">One packet on the wire, as nested envelopes</div>
           {envelope(0)}
+        </div>
+        <div className="lm-model">
+          <div className="lm-model-caption">{MODELS[model].caption}</div>
+          <ol className="lm-model-rows">
+            {MODELS[model].rows.map((r) => {
+              const lit = r.layers.includes(sel);
+              const tint = r.layers[0];
+              return (
+                <li
+                  key={r.num}
+                  className={['lm-row', tint && `lm-${tint}`, r.noHeader && 'is-virtual', lit && 'is-lit'].filter(Boolean).join(' ')}
+                >
+                  <span className="lm-row-num">{r.num}</span>
+                  <span className="lm-row-name">{r.name}</span>
+                  <span className="lm-row-what">
+                    {r.what}
+                    {r.noHeader && <span className="dg-pill muted">no header of its own</span>}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
         </div>
       </div>
     </DiagramFrame>

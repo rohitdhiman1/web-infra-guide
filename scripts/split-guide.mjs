@@ -84,6 +84,8 @@ const DIAGRAMS = [
 const EXTRAS = {
   'part-3-http11': [{ name: 'HttpTimeline', after: 'lead' }],
   index: [{ name: 'BeyondTheGuide', before: 'The topics that give you chills', heading: 'Beyond the 15 parts' }],
+  'part-1-networking': [{ name: 'OsiLayers', after: '1.1', partial: true }],
+  'part-9-load-balancing': [{ name: 'LayerNumbers', after: '9.1', partial: true }],
   'part-2-linux': [
     { name: 'FdTable', after: '2.2' },
     { name: 'IoModels', after: '2.4' },
@@ -344,7 +346,7 @@ function formatPage(body) {
 
     // Diagrams near the top of a page get a section heading from their title.
     // Extras placed inside a concept keep its section and get no heading of their own.
-    if (/^<[A-Za-z0-9]+ client:visible \/> \{\/\* inline \*\/\}$/.test(line)) {
+    if (/^<[A-Za-z0-9]+ (client:visible )?\/> \{\/\* inline \*\/\}$/.test(line)) {
       out.push(line.replace(' {/* inline */}', ''));
       continue;
     }
@@ -397,7 +399,7 @@ for (const s of pageSections) {
   const { imports, body: generated } = transformSection(s);
   // Insert any extras: after the opening paragraph, or right after a concept's line.
   let raw = generated;
-  for (const { name, after, before, heading } of EXTRAS[s.page.slug] ?? []) {
+  for (const { name, after, before, heading, partial } of EXTRAS[s.page.slug] ?? []) {
     if (before) {
       imports.push(`import ${name} from '../../components/content/${name}.mdx';`);
       const lines = raw.split('\n');
@@ -407,8 +409,9 @@ for (const s of pageSections) {
       raw = lines.join('\n');
       continue;
     }
-    imports.push(`import ${name} from '../../components/diagrams/${name}';`);
-    const tag = `<${name} client:visible />`;
+    // A partial is static MDX from src/components/content; anything else is an interactive diagram.
+    imports.push(partial ? `import ${name} from '../../components/content/${name}.mdx';` : `import ${name} from '../../components/diagrams/${name}';`);
+    const tag = partial ? `<${name} />` : `<${name} client:visible />`;
     if (after === 'lead') {
       const cut = raw.indexOf('\n\n');
       raw = cut < 0 ? `${raw}\n\n${tag}` : `${raw.slice(0, cut)}\n\n${tag}${raw.slice(cut)}`;

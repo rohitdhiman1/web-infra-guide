@@ -6,6 +6,7 @@ tableOfContents:
 import LayerModel from '../../components/diagrams/LayerModel';
 import TcpLifecycle from '../../components/diagrams/TcpLifecycle';
 import DnsResolution from '../../components/diagrams/DnsResolution';
+import OsiLayers from '../../components/content/OsiLayers.mdx';
 import Checkpoint from '../../components/content/Checkpoint.astro';
 
 Every HTTP problem eventually becomes a network problem, so this layer pays back forever. Plan about one week.
@@ -55,6 +56,8 @@ A DNS zone is a list of records: a name, a type, a TTL and a value. These are th
 ### <span class="concept-badge">1.1</span> The layer model
 
 Know which layer each thing lives at: IP (routing packets), TCP or UDP (transport), TLS (security), HTTP (application). Debugging means asking "which layer failed?"
+
+<OsiLayers />
 
 <span id="concept-1-2"></span>
 

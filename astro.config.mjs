@@ -14,6 +14,15 @@ export default defineConfig({
       description:
         'A concept map and hands-on course on web servers, HTTP, HTTPS/TLS and nginx.',
       customCss: ['./src/styles/custom.css'],
+      head: [
+        // Restore the reader's chosen navigation width before first paint (see public/sidebar-resize.js).
+        {
+          tag: 'script',
+          content:
+            "try{var w=localStorage.getItem('sl-sidebar-width');if(/^\\d+$/.test(w||''))document.documentElement.style.setProperty('--user-sidebar-width',w+'px')}catch(e){}",
+        },
+        { tag: 'script', attrs: { src: '/sidebar-resize.js', defer: true } },
+      ],
       // Code blocks get the same rounded corners as tables and callouts.
       expressiveCode: { styleOverrides: { borderRadius: '0.5rem' } },
       lastUpdated: false,
@@ -28,9 +37,9 @@ export default defineConfig({
           items: [
             page('Part 1 — Networking foundations', 'part-1-networking'),
             page('Part 2 — The Linux layer', 'part-2-linux'),
+            page('Part 3 — HTTP/1.1 in depth', 'part-3-http11'),
             page('C1 — Containers from the kernel up', 'foundations/c1-containers'),
             page('C2 — Container networking', 'foundations/c2-container-networking'),
-            page('Part 3 — HTTP/1.1 in depth', 'part-3-http11'),
           ],
         },
         {
