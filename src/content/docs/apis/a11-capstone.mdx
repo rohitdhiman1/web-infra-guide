@@ -20,8 +20,9 @@ Every module so far built one idea in isolation. The capstone puts them in one s
 | Collections | `GET /orders` newest first, cursor pagination with `next` + `Link`, status filter, page-size limits | A5 |
 | Payments | `POST /orders/{id}/payments` with a required `Idempotency-Key`; replay, 422 on reuse, 409 while in progress; an atomic claim so an order is paid once; the key passed to the gateway | A3 |
 | Errors | RFC 9457 problem details for every failure, with JSON Pointers and the request id | A2 |
-| Edge | `X-Request-Id` on every response; a token bucket per API key with `X-RateLimit-*` headers and 429 + `Retry-After` | A9 |
-| Storage | Postgres: orders (with a version column), payments, idempotency keys | A3–A5 |
+| Edge | `X-Request-Id` on every response; a token bucket per client credential with `X-RateLimit-*` headers and 429 + `Retry-After` | A9 |
+| Security | Every request authenticated with an ES256 JWT or a hashed API key (401); a scope per action (403); customers see and change only their own orders, checked in the SQL (404); idempotency keys scoped to the caller | A10 |
+| Storage | Postgres: orders (with a version column and an owner), payments, idempotency keys | A3–A5, A10 |
 
 ## One request through every layer
 
@@ -44,10 +45,13 @@ Write the contract first (A2.9): an OpenAPI document for every endpoint above, i
 | Is anything slow enough to need 202, polling or webhooks? | A7 |
 | Is resource-oriented HTTP the right style for each consumer? | A8 |
 | What are the limits (rate, page size, body size), and how does a client learn about them? | A9 |
+| Who may call each endpoint, with which scope, and which orders may they touch? | A10 |
 
 ## Phase 2 — Build it, then prove it
 
 Build the service in Java, Python or both. When it runs, check it with the **conformance suite**: black-box tests that speak only HTTP, so they run against any implementation in any language. Point them at your server with `BASE_URL`. Both reference implementations pass all of them.
+
+Every request carries a credential, so your service needs the same small stand-in identity provider as Lab A10: `POST /token` with `{"user": "alice"}` returns a short-lived ES256 token. The suite uses four users (`alice` and `bob` are customers, `sam` is support, `ana` is an admin) and one service API key, `wh_test_4f9c2a7d1e8b6035`, a throwaway value. Each test takes a fresh token, which is also a fresh rate-limit bucket.
 
 | # | The suite checks |
 |---|---|
@@ -61,7 +65,12 @@ Build the service in Java, Python or both. When it runs, check it with the **con
 | 8 | Payments: no key `400`; first `201`; same key replays identical bytes with `Idempotent-Replayed`; changed body `422`; new key `409`; one payment; order `paid` with a new ETag |
 | 9 | A paid order refuses edits: `409`, type `order-locked` |
 | 10 | Request ids echoed in headers and problem bodies |
-| 11 | Enough requests on one key end in a `429` problem with `Retry-After` |
+| 11 | Enough requests with one token end in a `429` problem with `Retry-After` |
+| 12 | No credential: `401` problem, type `unauthenticated`, with `WWW-Authenticate: Bearer …` |
+| 13 | A malformed token or an unknown API key: `401`, type `invalid-token`, `error="invalid_token"` for the token |
+| 14 | Support (no `orders:write`) creating or editing: `403`, type `insufficient-scope`, with `scope="orders:write"` in `WWW-Authenticate` |
+| 15 | Bob reading, editing, paying or listing payments of Alice's order: `404`, and it's missing from his `GET /orders`; the order is unchanged |
+| 16 | Support with a token, and the warehouse service with its API key, may read Alice's order: `200` |
 
 The suite found a real bug while this capstone was being written. The Python version answered `DELETE /orders` with `Allow: POST`, missing `GET`. That's the Starlette behaviour from A1, whose workaround hadn't been carried into the later labs. Black-box tests catch exactly this kind of regression that per-module tests miss.
 
@@ -78,6 +87,7 @@ Each drill is a small experiment. Predict what will happen, run it, then explain
 | Paging under load | Page through orders with `limit=2` while a loop creates new orders; then repeat with `offset` | Cursor: no repeats. Offset: repeated orders | A5.2, A5.3 |
 | Rate limit fleet | Run two copies of the service on different ports behind nginx ([Part 9](/part-9-load-balancing/)) and hammer one key | Roughly twice the limit gets through: in-memory limits are per instance | A9.5 |
 | Proxy timeout | Put nginx in front with `proxy_read_timeout 1s` and a 3 s gateway delay | nginx returns `504` while the payment still completes; a retry with the key replays the `201` | A3.2, [3.4](/part-3-http11/#concept-3-4) |
+| Forgotten check | Drop the owner condition from the order query (keep the scope check) and rerun the suite | Test 15 fails: Bob now reads and pays Alice's order. Every other test still passes, which is why this bug ships | A10.8 |
 | Breaking change | Rename `customer` in your OpenAPI document and diff it against the previous version with a tool such as oasdiff | The tool flags a breaking change; plan how a v2 and a `Deprecation` header would roll it out | A6 |
 
 ## Phase 4 — Explain it
@@ -86,11 +96,12 @@ Write one page, then say it out loud, as if an interviewer asked “walk me thro
 
 1. The resources and why they're shaped that way.
 2. The status codes and problem types, and how a client is meant to react to each.
-3. What a client should retry, and how the service makes that safe: keys, fingerprints, the atomic claim, passing the key to the gateway.
-4. How concurrent edits are handled, and why optimistic locking instead of locks.
-5. How pagination stays correct under writes, and what it doesn't guarantee.
-6. The limits, where they're enforced, and what changes with more than one instance.
-7. What you'd change for production: authentication and authorisation ([A10](/apis/a10-security/)), a shared rate-limit store, key expiry, an outbox for events, observability.
+3. Who may do what: how a caller authenticates, which scope each action needs, and where the ownership check lives.
+4. What a client should retry, and how the service makes that safe: keys, fingerprints, the atomic claim, passing the key to the gateway.
+5. How concurrent edits are handled, and why optimistic locking instead of locks.
+6. How pagination stays correct under writes, and what it doesn't guarantee.
+7. The limits, where they're enforced, and what changes with more than one instance.
+8. What you'd change for production: a real identity provider and its JWKS instead of the stand-in `/token`, key rotation, a shared rate-limit store, idempotency-key expiry, an outbox for events, observability.
 
 ## You've got it when
 

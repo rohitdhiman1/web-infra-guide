@@ -202,58 +202,154 @@ Pick a caller and an action. Watch which layer answers: authentication (401), fu
 
 <AuthMatrix client:visible />
 
-## What it looks like on the wire
+## Lab A10 — tokens, keys, scopes and ownership
 
-This module has no reference lab yet; these are the exchanges an implementation must produce.
+Two orders, `ord_1` (Alice's) and `ord_2` (Bob's), in memory. Two kinds of caller. **Users** get a short-lived JWT from `POST /token`, a stand-in for an identity provider such as Keycloak, Auth0 or Entra ID so the lab runs offline. It skips the part where a real provider checks a password or passkey, and just signs a token for the user name you send. **Services** send an API key, and the server stores only its SHA-256 hash.
 
-#### No credential
+Authentication runs before routing, for every path except `/token` and `/.well-known/jwks.json`, so a new endpoint is protected until someone opens it up on purpose. Authorisation lives in the handlers, because only they know which order is being touched.
 
-```http
-GET /orders/ord_1 HTTP/1.1
+#### Callers
 
-HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer
-Content-Type: application/problem+json
+| Caller | Credential | Role | Scopes |
+|---|---|---|---|
+| `alice`, `bob` | JWT | customer | `orders:read orders:write` |
+| `sam` | JWT | support | `orders:read orders:read:any` |
+| `ana` | JWT | admin | `orders:read orders:read:any orders:write refunds:write` |
+| warehouse service | `X-API-Key: wh_test_4f9c2a7d1e8b6035` (a throwaway value) | service | `orders:read orders:read:any` |
 
-{"type": "https://api.example.com/problems/unauthenticated", "title": "Authentication required", "status": 401}
+Tokens are ES256, signed with a P-256 key generated at startup, and carry `iss: https://id.orders.test`, `aud: orders-api`, `sub`, `exp` (5 minutes), `jti`, `scope` and `role`.
+
+#### Spec
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `GET /orders/ord_1` with no credential | `401` problem, type `unauthenticated`, `WWW-Authenticate: Bearer realm="orders-api"` |
+| 2 | `GET /no-such-thing` with no credential | `401`, not `404`: unknown paths reveal nothing either |
+| 3 | `POST /token` `{"user": "alice"}` / `{"user": "mallory"}` | `200` with `access_token`, `token_type: Bearer`, `expires_in: 300` and `Cache-Control: no-store` / `400` |
+| 4 | A token whose `exp` passed 10 minutes ago | `401` problem, type `invalid-token`, `WWW-Authenticate` containing `error="invalid_token"` |
+| 5 | A valid signature but `iss: https://evil.test`, or `aud: billing-api` | `401` |
+| 6 | Bob's token with its payload swapped for Alice's, or `"alg": "none"` with no signature | `401` |
+| 7 | `X-API-Key: wh_test_guessed` | `401`, `WWW-Authenticate: ApiKey realm="orders-api"` |
+| 8 | `GET /.well-known/jwks.json` | One `EC` key with a `kid`, and no `d` (the private part) |
+| 9 | Alice: `POST /orders/ord_1/refunds`. Bob: `GET /admin/orders` | `403` problem, type `insufficient-scope`, `WWW-Authenticate: Bearer error="insufficient_scope", scope="refunds:write"` |
+| 10 | Bob: `GET /orders/ord_1`, and `PATCH` it | `404`, word for word the same as `GET /orders/ord_999` |
+| 11 | Alice: `GET /orders`, then `PATCH /orders/ord_1` `{"status": "cancelled"}` | Only her one order; then `200` with `status: cancelled` |
+| 12 | Sam: `GET /orders/ord_1` and `GET /admin/orders`, then `PATCH /orders/ord_1` | `200`, `200`, then `403` (no `orders:write`) |
+| 13 | Ana: `POST /orders/ord_1/refunds`, then `POST /orders/ord_999/refunds` | `201` with `Location: /orders/ord_1/refunds/ref_1`, then `404` |
+| 14 | Alice: `PATCH /orders/ord_1` `{"status": "cancelled", "total": "0.01"}` | `422` problem, type `read-only-field`, pointer `#/total`; the order is unchanged |
+| 15 | Warehouse key: `GET /admin/orders`, then `PATCH /orders/ord_1` | `200` with both orders, then `403` |
+| 16 | Alice: `DELETE /orders/ord_1` | `405` with `Allow` listing `GET` and `PATCH` |
+
+#### Verifying a token
+
+The verifier accepts exactly one algorithm. A verifier that believes the token's own `alg` header can be handed `"alg": "none"`, or an HS256 token signed with the public key as if it were a shared secret.
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+Spring Security does the authentication. `ApiKeyFilter` runs just before the bearer-token filter and handles `X-API-Key`.
+
+```java
+@Bean
+SecurityFilterChain api(HttpSecurity http, AuthenticationEntryPoint entryPoint) throws Exception {
+  return http
+      // No cookies and no sessions: every request carries its own credential, so CSRF doesn't apply.
+      .csrf(c -> c.disable())
+      .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+      .authorizeHttpRequests(a -> a
+          .requestMatchers("/token", "/.well-known/jwks.json", "/error").permitAll()
+          .anyRequest().authenticated())   // deny by default
+      .oauth2ResourceServer(o -> o.jwt(j -> {}).authenticationEntryPoint(entryPoint))
+      .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint))
+      .addFilterBefore(new ApiKeyFilter(entryPoint), BearerTokenAuthenticationFilter.class)
+      .build();
+}
+
+@Bean
+JwtDecoder jwtDecoder(SigningKeys keys, @Value("${auth.issuer}") String issuer,
+                      @Value("${auth.audience}") String audience) {
+  // In production: NimbusJwtDecoder.withIssuerLocation(issuer), which fetches and caches the provider's JWKS.
+  NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSource(new ImmutableJWKSet<>(keys.publicJwks()))
+      .jwsAlgorithm(SignatureAlgorithm.ES256).build();
+  decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+      new JwtTimestampValidator(Duration.ofSeconds(30)),   // exp and nbf, with 30 s of clock skew
+      new JwtIssuerValidator(issuer),
+      new JwtClaimValidator<List<String>>(JwtClaimNames.AUD, aud -> aud != null && aud.contains(audience))));
+  return decoder;
+}
 ```
 
-#### An expired token
+</TabItem>
+<TabItem label="Python (FastAPI)">
 
-```http
-GET /orders/ord_1 HTTP/1.1
-Authorization: Bearer eyJhbGciOiJSUzI1NiIs…
+PyJWT does the verifying. A middleware runs it before routing, so nothing reaches a route unauthenticated.
 
-HTTP/1.1 401 Unauthorized
-WWW-Authenticate: Bearer error="invalid_token", error_description="The access token expired"
+```python
+def authenticate(authorization: str | None, api_key: str | None) -> Caller:
+    if api_key is not None:
+        client = API_KEYS.get(sha256(api_key))          # only hashes are stored
+        if client is None:
+            raise Unauthenticated("invalid-token", "unknown API key", 'ApiKey realm="orders-api"')
+        return Caller(client[0], "service", client[1])
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise Unauthenticated("unauthenticated", "send Authorization: Bearer <token>, or X-API-Key",
+                              'Bearer realm="orders-api"')
+    try:
+        claims = jwt.decode(token, PUBLIC_KEY, algorithms=["ES256"], audience=AUDIENCE, issuer=ISSUER,
+                            leeway=30, options={"require": ["exp", "iss", "aud", "sub"]})
+    except jwt.InvalidTokenError:
+        raise Unauthenticated("invalid-token", "the access token is invalid or expired",
+                              'Bearer realm="orders-api", error="invalid_token"') from None
+    return Caller(claims["sub"], claims.get("role"), frozenset(claims.get("scope", "").split()))
+
+
+@app.middleware("http")
+async def authenticate_requests(request: Request, call_next):
+    if request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    try:
+        request.state.caller = authenticate(request.headers.get("authorization"), request.headers.get("x-api-key"))
+    except Unauthenticated as e:
+        return problem(request, 401, e.type, e.detail, headers={"WWW-Authenticate": e.challenge})
+    return await call_next(request)
 ```
 
-#### Bob asks for Alice's order
+</TabItem>
+</Tabs>
 
-```http
-GET /orders/ord_1 HTTP/1.1
-Authorization: Bearer <a valid token for Bob>
+#### Checking scope and ownership
 
-HTTP/1.1 404 Not Found
-Content-Type: application/problem+json
-
-{"type": "https://api.example.com/problems/order-not-found", "title": "Order not found", "status": 404}
-```
-
-#### The ownership check in code
-
-The check belongs in the query, so a forgotten `if` can't skip it.
+Every handler starts the same way: the scope check (403), then the ownership check (404), then the work. Both languages put the caller in one small `Caller` type, so handlers never touch a raw token or key.
 
 <Tabs syncKey="lab-lang">
 <TabItem label="Java (Spring Boot)">
 
 ```java
-public Order get(String id, Caller caller) {
-  return db.sql("SELECT * FROM orders WHERE id = ? AND customer_id = ?")
-      .params(Ids.order(id), caller.customerId())
-      .query(this::row).optional()
-      // Not found and not yours look identical to the caller.
-      .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "order-not-found", "order " + id + " not found"));
+// Caller: function-level authorisation
+void require(String scope) {
+  if (!has(scope)) {
+    throw new ApiException(HttpStatus.FORBIDDEN, "insufficient-scope", "this needs the " + scope + " scope",
+        Map.of(), Map.of("WWW-Authenticate", "Bearer error=\"insufficient_scope\", scope=\"" + scope + "\""));
+  }
+}
+
+// OrderController: object-level authorisation. Missing and "not yours" are the same 404.
+private Order find(Caller c, String id, boolean write) {
+  Order o = orders.get(id);
+  boolean mayAccess = o != null && (o.customerId().equals(c.id())
+      || (write ? "admin".equals(c.role()) : c.has("orders:read:any")));
+  if (!mayAccess) {
+    throw new ApiException(HttpStatus.NOT_FOUND, "order-not-found", "order " + id + " not found");
+  }
+  return o;
+}
+
+@GetMapping("/orders/{id}")
+Order get(@PathVariable String id, Authentication auth) {
+  Caller c = Caller.from(auth);
+  c.require("orders:read");
+  return find(c, id, false);
 }
 ```
 
@@ -261,16 +357,43 @@ public Order get(String id, Caller caller) {
 <TabItem label="Python (FastAPI)">
 
 ```python
-def get_order(order_id: str, caller: Caller = Depends(current_caller)) -> Order:
-    row = db.execute("SELECT * FROM orders WHERE id = %s AND customer_id = %s",
-                     (parse_id(order_id), caller.customer_id)).fetchone()
-    if row is None:  # not found and not yours look identical to the caller
+# Caller: function-level authorisation
+def require(self, scope: str) -> None:
+    if not self.has(scope):
+        raise ApiError(403, "insufficient-scope", f"this needs the {scope} scope",
+                       headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{scope}"'})
+
+
+# Object-level authorisation. Missing and "not yours" are the same 404.
+def find(c: Caller, order_id: str, write: bool) -> Order:
+    o = ORDERS.get(order_id)
+    may_access = o is not None and (o.customerId == c.id or (c.role == "admin" if write else c.has("orders:read:any")))
+    if not may_access:
         raise ApiError(404, "order-not-found", f"order {order_id} not found")
-    return to_order(row)
+    return o
+
+
+@app.get("/orders/{order_id}")
+def get_order(order_id: str, request: Request):
+    c = request.state.caller
+    c.require("orders:read")
+    return asdict(find(c, order_id, write=False))
 ```
 
 </TabItem>
 </Tabs>
+
+With a database, put the ownership check in the query itself, so a handler can't forget it. The A11 capstone does this: `SELECT * FROM orders WHERE id = ? AND (owner = ? OR ?)`, where the last parameter is true only for staff who may see every order.
+
+#### Try it
+
+```bash
+curl -si localhost:8080/orders/ord_1 | grep -i -e '^HTTP' -e '^www-authenticate'
+TOKEN=$(curl -s localhost:8080/token -H 'Content-Type: application/json' -d '{"user":"bob"}' | jq -r .access_token)
+echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null; echo     # the claims: readable, not secret
+curl -s localhost:8080/orders/ord_1 -H "Authorization: Bearer $TOKEN"; echo    # Alice's order: 404
+curl -s localhost:8080/admin/orders -H 'X-API-Key: wh_test_4f9c2a7d1e8b6035'; echo
+```
 
 ## You've got it when
 

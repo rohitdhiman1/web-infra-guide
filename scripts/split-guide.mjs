@@ -78,9 +78,12 @@ const DIAGRAMS = [
  * Extra components that aren't in the guide. They add material without touching its wording.
  * `after: 'lead'` puts one after the opening paragraph, with a section heading;
  * `after: '2.7'` puts one right after that concept, inside its section, with no extra heading.
+ * `before: 'Heading text'` puts a static content partial (src/components/content/<name>.mdx) under its own
+ * `## <heading>` just before the guide's heading with that text. Used for site notes, not diagrams.
  */
 const EXTRAS = {
   'part-3-http11': [{ name: 'HttpTimeline', after: 'lead' }],
+  index: [{ name: 'BeyondTheGuide', before: 'The topics that give you chills', heading: 'Beyond the 15 parts' }],
   'part-2-linux': [
     { name: 'FdTable', after: '2.2' },
     { name: 'IoModels', after: '2.4' },
@@ -394,7 +397,16 @@ for (const s of pageSections) {
   const { imports, body: generated } = transformSection(s);
   // Insert any extras: after the opening paragraph, or right after a concept's line.
   let raw = generated;
-  for (const { name, after } of EXTRAS[s.page.slug] ?? []) {
+  for (const { name, after, before, heading } of EXTRAS[s.page.slug] ?? []) {
+    if (before) {
+      imports.push(`import ${name} from '../../components/content/${name}.mdx';`);
+      const lines = raw.split('\n');
+      const i = lines.findIndex((l) => /^#+ /.test(l) && l.includes(before));
+      if (i < 0) throw new Error(`EXTRAS: heading "${before}" not found on ${s.page.slug}`);
+      lines.splice(i, 0, `## ${heading}`, '', `<${name} />`, '');
+      raw = lines.join('\n');
+      continue;
+    }
     imports.push(`import ${name} from '../../components/diagrams/${name}';`);
     const tag = `<${name} client:visible />`;
     if (after === 'lead') {

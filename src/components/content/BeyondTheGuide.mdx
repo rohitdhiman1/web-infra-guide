@@ -1,0 +1,15 @@
+{/* Inserted into the "How to use this guide" page by scripts/split-guide.mjs (EXTRAS). Not part of source/guide.md. */}
+
+Everything above describes the guide's 15 parts. This site adds pages of its own around them. They don't change the parts; they fill gaps the parts assume, and each sits in the sidebar where it fits.
+
+| Pages | Where in the sidebar | What they add | Hands-on |
+|---|---|---|---|
+| [C1](/foundations/c1-containers/) and [C2](/foundations/c2-container-networking/) | Phase 1, after Part 2 | Containers as ordinary Linux processes (namespaces, cgroups, CPU throttling, the OOM killer, images), then container networking on one host (veth pairs, bridges, NAT, port publishing) | On a Linux VM with Docker, like the sandbox labs |
+| [T0](/practice/t0-symmetric-asymmetric/) | Phase 3, before Part 5 | Symmetric and asymmetric cryptography, key agreement, signing: the groundwork for TLS | `openssl` commands on any machine |
+| [T1](/practice/t1-tls-in-practice/) | Phase 3, after Part 5 | Encoding vs hashing vs encryption vs signing, certificate files and chains, Java keystores, Kafka TLS, why handshakes fail | `openssl` and `keytool` |
+| [T2](/practice/t2-http2-http3-in-production/) | Phase 3, after Part 6 | HTTP/2 and HTTP/3 behind proxies and load balancers: negotiation, trailers, stream limits, coalescing, running HTTP/3 | `curl`, `h2load` and nginx |
+| [APIs on HTTP](/apis/), A0 to A11 | Its own section | Designing and building HTTP APIs: semantics, errors, retries and idempotency, concurrency, pagination, versioning, webhooks, gateways, security, and a capstone | A lab spec per module, with tested Java and Python snippets. You build the labs on your own machine, with Postgres in Docker from A3 on |
+
+The parts' concepts are numbered 1.1, 1.2 and so on. The added pages number theirs with a letter in front (C1.1, T0.1, A0.1), so a reference like A3.2 always says which page it's on.
+
+The API track's labs aren't sized for a 6-hour sandbox. They run on your laptop and have no time limit. Start it whenever you've read the parts it lists under [“Before you start”](/apis/#before-you-start).
