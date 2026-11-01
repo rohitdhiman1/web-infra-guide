@@ -2667,7 +2667,7 @@
 }
 .rlc-how { margin-top: 0.9rem; }
 
-/* ---------- capstone pipeline (API track A10) ---------- */
+/* ---------- capstone pipeline (API track A11) ---------- */
 .cp-does {
   margin-top: 0.15rem;
   color: var(--dg-muted);
@@ -2678,4 +2678,138 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 0.4rem 0.6rem;
+}
+
+/* request anatomy: GET vs POST comparison */
+.ra-seg.is-ghost {
+  font-style: italic;
+  color: var(--dg-muted);
+  background: transparent;
+  border-style: dashed;
+}
+.ra-seg.is-ghost[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+.ra-status {
+  display: grid;
+  gap: 0.5rem;
+}
+.ra-diff {
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--dg-border);
+}
+.ra-diff-label {
+  display: inline-block;
+  margin-inline-end: 0.35rem;
+  font-size: var(--sl-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dg-accent-text);
+}
+.ra-legend {
+  margin: 0.6rem 0 0;
+  color: var(--dg-muted);
+  font-size: var(--sl-text-xs);
+}
+
+/* ---------- API styles timeline (API track A8) ---------- */
+.tl {
+  display: grid;
+  gap: 1.25rem;
+}
+.tl-era-name {
+  margin: 0 0 0.5rem;
+  font-size: var(--sl-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dg-accent-text);
+}
+.tl-era-name span {
+  white-space: nowrap;
+  margin-inline-start: 0.4rem;
+  color: var(--dg-muted);
+  font-weight: 600;
+}
+.tl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.tl-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3rem 1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 !important;
+}
+/* the vertical line through the dots */
+.tl-item::before {
+  content: '';
+  position: absolute;
+  left: calc(3rem + 0.6rem + 0.5rem - 1px);
+  top: -0.5rem;
+  bottom: -0.5rem;
+  border-left: 2px solid var(--dg-border);
+}
+.tl-list .tl-item:first-child::before { top: 50%; }
+.tl-list .tl-item:last-child::before { bottom: 50%; }
+.tl-year {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--dg-muted);
+  text-align: end;
+}
+.tl-dot {
+  position: relative;
+  z-index: 1;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-inline: auto;
+  border-radius: 50%;
+  background: var(--dg-accent);
+  border: 2px solid var(--dg-accent);
+}
+.tl-item.is-context .tl-dot {
+  background: var(--dg-bg);
+  border-color: var(--dg-muted);
+}
+.tl-card {
+  display: grid;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--dg-border);
+  border-radius: 0.5rem;
+  background: var(--dg-panel);
+  color: var(--dg-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.tl-card:hover {
+  border-color: var(--dg-accent);
+}
+.tl-card[aria-pressed='true'] {
+  border-color: var(--dg-accent);
+  background: var(--dg-accent-soft);
+}
+.tl-card:focus-visible {
+  outline: 2px solid var(--dg-accent);
+  outline-offset: 2px;
+}
+.tl-name {
+  font-weight: 700;
+}
+.tl-item.is-context .tl-name {
+  color: var(--dg-muted);
+}
+.tl-short {
+  color: var(--dg-muted);
+  font-size: var(--sl-text-xs);
 }

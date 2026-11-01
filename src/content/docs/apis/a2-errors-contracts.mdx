@@ -1,26 +1,142 @@
 ---
 title: "A2 — Errors and contracts"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 Clients spend more code handling your errors than your successes. An error format that changes from endpoint to endpoint, or that only a human can read, pushes every client into string-matching and guesswork. This module standardises the error body and then writes the whole contract down, so clients can rely on it and tools can check it.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-a2-1" class="concept-num" href="#concept-a2-1">A2.1</a> Errors are part of the contract.** Clients branch on errors: retry, ask the user to fix a field, refresh and try again, or give up. To do that they need three things that don't change: the status code (A1), a machine-readable error *type*, and a pointer to what was wrong. Human-readable text is for logs and people, never for `if` statements.
-- **<a id="concept-a2-2" class="concept-num" href="#concept-a2-2">A2.2</a> Problem details (RFC 9457).** The IETF standard error body, sent as `application/problem+json`. RFC 9457 (2023) replaced RFC 7807 with only small changes, so you'll hear both numbers. It defines five members: `type` (a URI identifying the kind of problem), `title` (a short summary that's the same for every occurrence of that type), `status` (the HTTP status, repeated for convenience), `detail` (what went wrong this time) and `instance` (which request or resource it happened on). You may add your own *extension members*.
-- **<a id="concept-a2-3" class="concept-num" href="#concept-a2-3">A2.3</a> The type is the identifier.** Clients switch on `type`, not on `title` or `detail`, which you can reword freely. Make it a stable absolute URI such as `https://api.example.com/problems/order-cancelled`, ideally one that serves a page explaining the problem. If a problem has no meaning beyond its status code, use `about:blank` (or leave `type` out, which means the same) and set `title` to the standard reason phrase.
-- **<a id="concept-a2-4" class="concept-num" href="#concept-a2-4">A2.4</a> Report every invalid field at once.** Nobody enjoys fixing one field per round trip. RFC 9457 suggests an `errors` extension: one entry per problem, each with a `detail` and a `pointer`, a JSON Pointer (RFC 6901) into the request body, written as a URI fragment like `#/items/0/quantity`. A form can put each message under the right input.
-- **<a id="concept-a2-5" class="concept-num" href="#concept-a2-5">A2.5</a> Layers of validation.** Check in order, and each layer gets its own code: does the body parse (400), does it have the right shape and values (422), is the request allowed in the resource's current state (409). A client can then tell a bug in its serializer from a user typing a bad value from a race with another user.
-- **<a id="concept-a2-6" class="concept-num" href="#concept-a2-6">A2.6</a> Don't leak internals.** Stack traces, SQL errors, class names and file paths in error bodies help attackers map your system and teach clients to depend on accidents. Log them with the request id (module A9) and send the client a type and a clear detail. Framework defaults can leak too: Spring's 404 for an unknown path says `No static resource nope.`, which reveals that a static-file handler sits behind the API.
-- **<a id="concept-a2-7" class="concept-num" href="#concept-a2-7">A2.7</a> One format for every error.** It's easy to format your own errors and forget the framework's: 404 for an unknown path, 405, 406, 415, a body that won't parse. Clients see all of them. Both labs route the framework's errors through the same problem-details code, headers (`Allow`, `Accept-Patch`) included.
-- **<a id="concept-a2-8" class="concept-num" href="#concept-a2-8">A2.8</a> OpenAPI describes the contract.** An OpenAPI 3.x document lists every path, method, parameter, request and response schema, status code and header, in YAML or JSON. Tools read it to render documentation, generate client libraries and server stubs, run mock servers, and check that real responses match.
-- **<a id="concept-a2-9" class="concept-num" href="#concept-a2-9">A2.9</a> Code-first or design-first.** *Code-first*: write the code and generate the OpenAPI document from it (FastAPI, springdoc). It's fast and always in sync with the code, but the design happens inside the implementation. *Design-first*: write and review the OpenAPI document before any code, the way you'd review an RFC, then generate stubs and test the code against the document. It's slower to start, but the contract gets reviewed by the people who'll consume it. Teams with many consumers tend to go design-first. Either way, keep the document in the repository and review changes to it like code.
-- **<a id="concept-a2-10" class="concept-num" href="#concept-a2-10">A2.10</a> Document the errors too.** A generated document is only as truthful as what the code declares. FastAPI documents a 422 automatically, with *its own* default error schema, which stops being true once you switch to problem details. Spring documents a create endpoint as `200` unless told it returns 201. Declare the real status codes and the `application/problem+json` schema, or the contract quietly lies.
-- **<a id="concept-a2-11" class="concept-num" href="#concept-a2-11">A2.11</a> Contract tests.** A contract test sends real requests and checks each response against the contract: status, headers and body schema. The spec tables in this track are contract tests in prose. Tools such as Schemathesis can generate thousands of such requests straight from an OpenAPI document and report every response that breaks it.
+<span id="concept-a2-1"></span>
+
+### <span class="concept-badge">A2.1</span> Errors are part of the contract
+
+Clients branch on errors: retry, ask the user to fix a field, refresh and try again, or give up. To do that they need three things that don't change: the status code (A1), a machine-readable error *type*, and a pointer to what was wrong. Human-readable text is for logs and people, never for `if` statements.
+
+<Takeaway>
+Clients branch on the status code and the error type, never on the message text.
+</Takeaway>
+
+<span id="concept-a2-2"></span>
+
+### <span class="concept-badge">A2.2</span> Problem details (RFC 9457)
+
+The IETF standard error body, sent as `application/problem+json`. RFC 9457 (2023) replaced RFC 7807 with only small changes, so you'll hear both numbers.
+
+It defines five members: `type` (a URI identifying the kind of problem), `title` (a short summary that's the same for every occurrence of that type), `status` (the HTTP status, repeated for convenience), `detail` (what went wrong this time) and `instance` (which request or resource it happened on). You may add your own *extension members*.
+
+<Takeaway>
+Use RFC 9457 problem details, sent as application/problem+json, for every error.
+</Takeaway>
+
+<span id="concept-a2-3"></span>
+
+### <span class="concept-badge">A2.3</span> The type is the identifier
+
+Clients switch on `type`, not on `title` or `detail`, which you can reword freely. Make it a stable absolute URI such as `https://api.example.com/problems/order-cancelled`, ideally one that serves a page explaining the problem.
+
+If a problem has no meaning beyond its status code, use `about:blank` (or leave `type` out, which means the same) and set `title` to the standard reason phrase.
+
+<Takeaway>
+The type URI is the stable identifier; title and detail are for humans.
+</Takeaway>
+
+<span id="concept-a2-4"></span>
+
+### <span class="concept-badge">A2.4</span> Report every invalid field at once
+
+Nobody enjoys fixing one field per round trip. RFC 9457 suggests an `errors` extension: one entry per problem, each with a `detail` and a `pointer`, a JSON Pointer (RFC 6901) into the request body, written as a URI fragment like `#/items/0/quantity`. A form can put each message under the right input.
+
+<Takeaway>
+Return every invalid field at once, each located with a JSON Pointer.
+</Takeaway>
+
+<span id="concept-a2-5"></span>
+
+### <span class="concept-badge">A2.5</span> Layers of validation
+
+Check in order, and each layer gets its own code: does the body parse (400), does it have the right shape and values (422), is the request allowed in the resource's current state (409). A client can then tell a bug in its serializer from a user typing a bad value from a race with another user.
+
+<Takeaway>
+Parse (400), validate (422), then check against current state (409), in that order.
+</Takeaway>
+
+<span id="concept-a2-6"></span>
+
+### <span class="concept-badge">A2.6</span> Don't leak internals
+
+Stack traces, SQL errors, class names and file paths in error bodies help attackers map your system and teach clients to depend on accidents. Log them with the request id (module A9) and send the client a type and a clear detail.
+
+Framework defaults can leak too: Spring's 404 for an unknown path says `No static resource nope.`, which reveals that a static-file handler sits behind the API.
+
+<Takeaway>
+Log the internals with a request id; send the client only a type and a clear detail.
+</Takeaway>
+
+<span id="concept-a2-7"></span>
+
+### <span class="concept-badge">A2.7</span> One format for every error
+
+It's easy to format your own errors and forget the framework's: 404 for an unknown path, 405, 406, 415, a body that won't parse. Clients see all of them.
+
+Both labs route the framework's errors through the same problem-details code, headers (`Allow`, `Accept-Patch`) included.
+
+<Takeaway>
+Framework errors (404, 405, 415) must use the same format as your own.
+</Takeaway>
+
+<span id="concept-a2-8"></span>
+
+### <span class="concept-badge">A2.8</span> OpenAPI describes the contract
+
+An OpenAPI 3.x document lists every path, method, parameter, request and response schema, status code and header, in YAML or JSON. Tools read it to render documentation, generate client libraries and server stubs, run mock servers, and check that real responses match.
+
+<Takeaway>
+An OpenAPI document is the machine-readable contract that tools build on.
+</Takeaway>
+
+<span id="concept-a2-9"></span>
+
+### <span class="concept-badge">A2.9</span> Code-first or design-first
+
+*Code-first*: write the code and generate the OpenAPI document from it (FastAPI, springdoc). It's fast and always in sync with the code, but the design happens inside the implementation.
+
+*Design-first*: write and review the OpenAPI document before any code, the way you'd review an RFC, then generate stubs and test the code against the document. It's slower to start, but the contract gets reviewed by the people who'll consume it. Teams with many consumers tend to go design-first.
+
+Either way, keep the document in the repository and review changes to it like code.
+
+<Takeaway>
+Code-first is fast; design-first gets the contract reviewed before it's built.
+</Takeaway>
+
+<span id="concept-a2-10"></span>
+
+### <span class="concept-badge">A2.10</span> Document the errors too
+
+A generated document is only as truthful as what the code declares. FastAPI documents a 422 automatically, with *its own* default error schema, which stops being true once you switch to problem details.
+
+Spring documents a create endpoint as `200` unless told it returns 201. Declare the real status codes and the `application/problem+json` schema, or the contract quietly lies.
+
+<Takeaway>
+A generated contract is only true if the code declares its real codes and error schema.
+</Takeaway>
+
+<span id="concept-a2-11"></span>
+
+### <span class="concept-badge">A2.11</span> Contract tests
+
+A contract test sends real requests and checks each response against the contract: status, headers and body schema. The spec tables in this track are contract tests in prose.
+
+Tools such as Schemathesis can generate thousands of such requests straight from an OpenAPI document and report every response that breaks it.
+
+<Takeaway>
+Contract tests check real responses against the contract, so drift is caught automatically.
+</Takeaway>
 
 ## What a problem looks like
 
@@ -57,7 +173,9 @@ Content-Type: application/problem+json
 
 Start from A1. Keep every A1 behaviour, and change every error body to problem details.
 
-**Spec.** All of A1's rows still pass, with these changes and additions:
+#### Spec
+
+All of A1's rows still pass, with these changes and additions:
 
 | # | Request | Must return |
 |---|---|---|
@@ -140,7 +258,6 @@ FastAPI generates `/openapi.json` on its own. Replace its default 422 schema wit
 def problems_doc(*codes: int) -> dict:
     return {c: {"model": Problem, "content": {"application/problem+json": {}}} for c in codes}
 
-
 @app.post("/orders", status_code=201, response_model=Order, responses=problems_doc(400, 415, 422))
 def create_order(body: OrderInput, response: Response): ...
 ```
@@ -148,13 +265,13 @@ def create_order(body: OrderInput, response: Response): ...
 </TabItem>
 </Tabs>
 
-**Framework details worth knowing**
+#### Framework details worth knowing
 
 - Spring sends `ProblemDetail` bodies as `application/problem+json` automatically, and omits `type` when it's `about:blank`.
 - Spring's default `detail` for an unknown path, `No static resource nope.`, leaks an implementation detail (A2.6). The lab leaves it so you can see it; a production API would override it.
 - In FastAPI, a HEAD route registered alongside GET with `api_route(methods=["GET", "HEAD"])` produces a duplicate OpenAPI operation id. The lab registers HEAD separately with `include_in_schema=False`.
 
-**Try it**
+#### Try it
 
 ```bash
 curl -s -X POST localhost:8080/orders -H 'Content-Type: application/json' \
@@ -165,4 +282,10 @@ curl -s localhost:8000/openapi.json | jq '.paths."/orders".post.responses | keys
 
 ## You've got it when
 
-You can write a problem details response from memory, explain what each member is for and which one clients should branch on, and argue for code-first or design-first for a given team, including what goes wrong with each.
+<Checkpoint>
+
+- Write a problem details response from memory.
+- Explain what each member is for, and which one clients should branch on.
+- Argue for code-first or design-first for a given team, including what goes wrong with each.
+
+</Checkpoint>

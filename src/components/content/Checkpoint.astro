@@ -1,0 +1,12 @@
+---
+/** The end-of-module self-check. Usage: <Checkpoint> - item - item </Checkpoint> */
+interface Props {
+  title?: string;
+}
+const { title = 'Without notes, you can:' } = Astro.props;
+---
+
+<aside class="checkpoint" aria-label={title}>
+  <p class="checkpoint-title">{title}</p>
+  <div class="checkpoint-body"><slot /></div>
+</aside>

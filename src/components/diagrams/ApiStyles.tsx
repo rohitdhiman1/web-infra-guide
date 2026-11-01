@@ -2,7 +2,7 @@ import { useState } from 'react';
 import DiagramFrame from './DiagramFrame';
 import { ToggleGroup } from './shared';
 
-type Style = 'rest' | 'grpc' | 'graphql' | 'sse' | 'ws' | 'webhook';
+type Style = 'rest' | 'soap' | 'grpc' | 'graphql' | 'sse' | 'ws' | 'webhook';
 
 interface Info {
   label: string;
@@ -33,6 +33,38 @@ Cache-Control: private, no-cache
       ['Streaming', 'No (one request, one response)'],
     ],
     best: 'Public APIs, resource-shaped data, anything browsers, curl and caches should understand. The default.',
+  },
+  soap: {
+    label: 'SOAP',
+    wire: `POST /OrderService HTTP/1.1
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "urn:example:orders/GetOrder"
+
+<soap:Envelope
+    xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+    xmlns:o="urn:example:orders">
+  <soap:Body>
+    <o:GetOrder><o:id>ord_1</o:id></o:GetOrder>
+  </soap:Body>
+</soap:Envelope>
+
+HTTP/1.1 200 OK
+Content-Type: text/xml; charset=utf-8
+
+<soap:Envelope ...><soap:Body>
+  <o:GetOrderResponse>
+    <o:status>pending</o:status><o:total>3000</o:total>
+  </o:GetOrderResponse>
+</soap:Body></soap:Envelope>`,
+    facts: [
+      ['Transport', 'HTTP, usually POST to one URL'],
+      ['Contract', 'WSDL, required; code generated'],
+      ['Payload', 'XML envelope: verbose'],
+      ['Caching', 'None: everything is a POST'],
+      ['Browsers', 'Possible, but painful'],
+      ['Streaming', 'No'],
+    ],
+    best: 'Integrating with banks, payment networks, insurers, telecoms and governments, which still expose SOAP. Errors come back as a SOAP Fault, usually with HTTP 500. Rarely chosen for new APIs.',
   },
   grpc: {
     label: 'gRPC',
@@ -156,7 +188,7 @@ export default function ApiStyles() {
   const info = STYLES[s];
   return (
     <DiagramFrame
-      title="One order, six styles"
+      title="One order, seven styles"
       subtitle="what goes over the wire"
       status={
         <>

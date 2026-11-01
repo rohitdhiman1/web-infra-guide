@@ -33,3 +33,243 @@
   display: block;
   overflow-x: auto;
 }
+
+/* ------------------------------------------------------------------
+   No right-hand "On this page" column on wide screens.
+   Instead, the pinned bar that phones use ("On this page › current
+   section", click to open the list) is shown at every width, and the
+   freed space goes to the page. Prose keeps a readable line length;
+   diagrams, tables and code use the full width.
+   ------------------------------------------------------------------ */
+@media (min-width: 72rem) {
+  :root {
+    --sl-mobile-toc-height: 3rem;
+    --sl-content-width: 64rem;
+    --__toc-width: 0rem; /* header layout: no right column to line up with */
+  }
+  html[data-has-toc] {
+    scroll-padding-top: calc(1.5rem + var(--sl-nav-height) + var(--sl-mobile-toc-height));
+  }
+  /* The right column stops taking space; its contents only keep the pinned bar. */
+  .right-sidebar-container {
+    width: 0 !important;
+    margin: 0 !important;
+  }
+  .right-sidebar {
+    position: static !important;
+    height: auto !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+  .right-sidebar-panel {
+    display: none !important;
+  }
+  .right-sidebar .lg\:sl-hidden {
+    display: block !important;
+  }
+  [data-has-sidebar][data-has-toc] .main-pane {
+    width: 100% !important;
+    --sl-content-margin-inline: auto !important;
+  }
+  /* Readable line length for running text. */
+  .sl-markdown-content > :is(p, ul, ol, blockquote, h2, h3, h4, h5, .starlight-aside, details, hr) {
+    max-width: 46rem;
+  }
+}
+@media (min-width: 72rem) {
+  /* On wide screens the open list is a compact panel under the button, not a full-width sheet. */
+  mobile-starlight-toc .dropdown {
+    max-width: 30rem;
+    margin-inline-start: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+  }
+}
+/* Jumping to a section glides instead of teleporting (unless the reader prefers less motion). */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Tables that read as tables: shaded header, cell borders, striped
+   rows and a rounded frame. Works in light and dark mode.
+   ------------------------------------------------------------------ */
+.sl-markdown-content table {
+  width: fit-content; /* the frame hugs the columns; wide tables still scroll inside it */
+  max-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  font-size: var(--sl-text-sm);
+  line-height: 1.5;
+}
+.sl-markdown-content :is(th, td) {
+  padding: 0.55rem 0.85rem;
+  border: 0;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  vertical-align: top;
+  text-align: start;
+}
+.sl-markdown-content :is(th, td) + :is(th, td) {
+  border-inline-start: 1px solid var(--sl-color-gray-5);
+}
+.sl-markdown-content thead th {
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-white);
+  font-weight: 600;
+}
+.sl-markdown-content tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 40%, transparent);
+}
+.sl-markdown-content tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+.sl-markdown-content thead th:first-child { border-start-start-radius: 0.5rem; }
+.sl-markdown-content thead th:last-child { border-start-end-radius: 0.5rem; }
+
+/* ==================================================================
+   Content formatting system. A0 (/apis/a0-foundations/) is the
+   reference page that uses every piece:
+     lead paragraph · h2 sections with dividers · h3 concepts with a
+     number badge · h4 small labels · tables · <Takeaway> · <Checkpoint>
+   ================================================================== */
+
+/* Lead: the page's opening paragraph sets the scene, slightly larger. */
+.sl-markdown-content > p:first-child:not(.guide-byline) {
+  font-size: var(--sl-text-lg);
+  line-height: 1.65;
+  color: var(--sl-color-gray-2);
+}
+
+/* h2: a major section. A hairline and generous space above separate it clearly. */
+.sl-markdown-content h2 {
+  font-size: clamp(1.5rem, 1.2rem + 1vw, 1.875rem);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  margin-top: 3.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--sl-color-hairline);
+}
+.sl-markdown-content > .sl-heading-wrapper.level-h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* h3: a subsection or a numbered concept. */
+.sl-markdown-content h3 {
+  font-size: clamp(1.15rem, 1.05rem + 0.4vw, 1.3rem);
+  font-weight: 600;
+}
+.sl-markdown-content .sl-heading-wrapper.level-h3 {
+  margin-top: 2.75rem;
+}
+.sl-markdown-content :is(.sl-heading-wrapper.level-h2) + .sl-heading-wrapper.level-h3,
+.sl-markdown-content :is(.sl-heading-wrapper.level-h2) + span + .sl-heading-wrapper.level-h3 {
+  margin-top: 1.5rem;
+}
+
+/* The concept number inside an h3: a quiet badge, so the title reads first. */
+.sl-markdown-content .concept-badge {
+  display: inline-block;
+  margin-inline-end: 0.5rem;
+  padding: 0.1em 0.5em;
+  border-radius: 0.4rem;
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-text-accent);
+  font-size: 0.72em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 0.15em;
+}
+
+/* h4: a small label inside a section ("Spec", "Try it"). */
+.sl-markdown-content h4 {
+  font-size: var(--sl-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sl-color-text-accent);
+}
+.sl-markdown-content .sl-heading-wrapper.level-h4 {
+  margin-top: 2rem;
+}
+.sl-markdown-content .sl-heading-wrapper.level-h4 + * {
+  margin-top: 0.6rem;
+}
+
+/* Lists: a little air between items. */
+.sl-markdown-content :is(ul, ol) > li + li {
+  margin-top: 0.4rem;
+}
+
+/* Takeaway: one line that closes a concept. */
+.sl-markdown-content .takeaway {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  max-width: 46rem;
+  padding: 0.7rem 1rem;
+  border-inline-start: 3px solid var(--sl-color-accent);
+  border-radius: 0 0.5rem 0.5rem 0;
+  background: color-mix(in srgb, var(--sl-color-accent-low) 55%, transparent);
+}
+.sl-markdown-content .takeaway-label {
+  flex-shrink: 0;
+  font-size: var(--sl-text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sl-color-text-accent);
+}
+.sl-markdown-content .takeaway-body > :first-child { margin-top: 0; }
+@media (max-width: 40rem) {
+  /* On phones the label sits above the text, so the text keeps the full width. */
+  .sl-markdown-content .takeaway {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+}
+.sl-markdown-content .takeaway-body p { color: var(--sl-color-white); }
+
+/* Checkpoint: the "You've got it when" self-check that ends a module. */
+.sl-markdown-content .checkpoint {
+  max-width: 46rem;
+  padding: 1rem 1.25rem 1.1rem;
+  border: 1px solid color-mix(in srgb, #1f9d55 45%, var(--sl-color-gray-5));
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, #1f9d55 7%, transparent);
+}
+.sl-markdown-content .checkpoint-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--sl-color-white);
+}
+.sl-markdown-content .checkpoint-body > :first-child { margin-top: 0.5rem; }
+.sl-markdown-content .checkpoint-body ul {
+  list-style: none;
+  padding-inline-start: 0;
+}
+.sl-markdown-content .checkpoint-body li {
+  position: relative;
+  padding-inline-start: 1.6rem;
+}
+.sl-markdown-content .checkpoint-body li::before {
+  content: '✓';
+  position: absolute;
+  inset-inline-start: 0.1rem;
+  color: #1f9d55;
+  font-weight: 700;
+}
+:root[data-theme='dark'] .sl-markdown-content .checkpoint-body li::before { color: #3ccf7e; }
+
+/* Asides (Definition etc.): calmer tint so they don't shout. */
+.sl-markdown-content .starlight-aside--note {
+  background: color-mix(in srgb, var(--sl-color-blue-low) 60%, transparent);
+  border-radius: 0 0.5rem 0.5rem 0;
+}

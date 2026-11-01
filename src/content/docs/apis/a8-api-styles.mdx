@@ -1,24 +1,152 @@
 ---
 title: "A8 — API styles"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import ApiStyles from '../../../components/diagrams/ApiStyles.tsx';
+import ApiTimeline from '../../../components/diagrams/ApiTimeline.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 “Why REST and not gRPC?” is a favourite interview question because there's no single right answer, only trade-offs. This module compares the styles you'll meet by what actually crosses the wire, and builds one of them, a Server-Sent Events stream, since it's the one that stays inside plain HTTP.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-a8-1" class="concept-num" href="#concept-a8-1">A8.1</a> Resource-oriented HTTP (“REST”).** Resources at URLs, standard methods and status codes, usually JSON (modules A0–A7). Its strength is that everything in between understands it: browsers, curl, caches, CDNs, proxies, log tools. Its weaknesses: clients may need several calls to assemble a screen (*under-fetching*) or get fields they don't need (*over-fetching*), and there's no streaming.
-- **<a id="concept-a8-2" class="concept-num" href="#concept-a8-2">A8.2</a> RPC and gRPC.** RPC models calls as functions (`GetOrder(id)`) rather than resources. gRPC is the common modern form: a `.proto` file defines services and messages, code generators produce typed clients and servers, and calls travel as **Protobuf** (compact binary) over **HTTP/2** ([Part 6](/part-6-http2-http3/)), always as `POST /package.Service/Method`. The status goes in an HTTP/2 *trailer* (`grpc-status`), so HTTP's status codes and caching mostly don't apply. It's great inside a company: small messages, deadlines that propagate, streaming in both directions, strict contracts. It's poor at the edge: browsers can't speak it directly and you can't debug it with curl.
-- **<a id="concept-a8-3" class="concept-num" href="#concept-a8-3">A8.3</a> GraphQL.** One endpoint and a typed schema; the client sends a query naming exactly the fields it wants, across related objects, in one round trip. It solves over- and under-fetching when many clients need different shapes of the same data graph. The costs: HTTP caching mostly stops working (every query is a POST to `/graphql`); errors often come back as `200` with an `errors` array; one innocent-looking nested query can make thousands of database calls (the N+1 problem, eased with batching *dataloaders*); and servers must limit query depth and cost.
-- **<a id="concept-a8-4" class="concept-num" href="#concept-a8-4">A8.4</a> Server-Sent Events.** One long-lived HTTP response with `Content-Type: text/event-stream`, to which the server keeps appending `id:`, `event:` and `data:` lines, each event ending with a blank line. Browsers support it natively (`EventSource`) and **reconnect automatically**, sending `Last-Event-ID` so the server can replay what was missed. It's one-way (server to client), but it's still plain HTTP, so authentication, proxies and load balancers work unchanged. Under HTTP/1.1 each open stream holds a connection, and browsers allow only about 6 per host; HTTP/2 multiplexing removes that limit.
-- **<a id="concept-a8-5" class="concept-num" href="#concept-a8-5">A8.5</a> WebSockets.** An HTTP request with `Upgrade: websocket` gets `101 Switching Protocols`, after which the TCP connection carries WebSocket frames in both directions, and HTTP is gone. Use them when traffic is genuinely two-way and latency-sensitive: chat, collaborative editing, multiplayer. You give up HTTP semantics on that connection: no status codes, no per-message headers. Request ids, errors, reconnection and auth refresh become your problem. Load balancers need sticky, long-lived connections, and deploys must drain them.
-- **<a id="concept-a8-6" class="concept-num" href="#concept-a8-6">A8.6</a> Webhooks and message brokers.** Webhooks (A7) push events to another company's HTTP server. Inside your own systems, a broker such as Kafka does the same job better: durable, replayable, ordered per partition, and consumers read at their own pace. A common shape is a broker inside the company, with webhooks or SSE at the edge for outsiders.
-- **<a id="concept-a8-7" class="concept-num" href="#concept-a8-7">A8.7</a> Long-lived connections and operations.** Streams and sockets change how you run servers. Idle connections get cut by proxies, so send heartbeats (SSE comment lines such as `: keep-alive`) more often than the shortest idle timeout on the path. nginx buffers responses by default, so turn buffering off for streams (`X-Accel-Buffering: no` or `proxy_buffering off`, [Part 8](/part-8-reverse-proxy/)). Graceful shutdown waits for open requests, and a stream never finishes on its own: the lab's first Java version took 96 seconds to stop until it closed its streams first.
-- **<a id="concept-a8-8" class="concept-num" href="#concept-a8-8">A8.8</a> Choosing.** For a public or partner API, use resource-oriented HTTP with OpenAPI. For internal service-to-service calls with strict contracts and high volume, gRPC. For many front-ends over a rich data graph, GraphQL, if you can invest in its operational guardrails. For live updates to clients, SSE (one-way) or WebSockets (two-way). For telling other companies something happened, webhooks; for telling your own services, a broker. Mixing is normal: many companies run gRPC inside and REST at the edge, translated by a gateway.
+<span id="concept-a8-1"></span>
+
+### <span class="concept-badge">A8.1</span> Resource-oriented HTTP (“REST”)
+
+Resources at URLs, standard methods and status codes, usually JSON (modules A0–A7). Its strength is that everything in between understands it: browsers, curl, caches, CDNs, proxies, log tools.
+
+Its weaknesses: clients may need several calls to assemble a screen (*under-fetching*) or get fields they don't need (*over-fetching*), and there's no streaming.
+
+<Takeaway>
+Resource-oriented HTTP works with everything in between: browsers, caches, proxies, curl.
+</Takeaway>
+
+<span id="concept-a8-2"></span>
+
+### <span class="concept-badge">A8.2</span> SOAP: the enterprise RPC protocol
+
+SOAP is an XML protocol for calling remote operations, standardised by the W3C in the early 2000s. Every request is an XML **envelope** with an optional header and a body naming the operation, usually POSTed to a single endpoint. On Richardson's ladder (A0.6) that's level 0: one URL, everything is a POST, and HTTP is only the transport.
+
+The contract is a **WSDL** document: an XML description of every operation, message and data type. Tools generate client and server code from it, much as gRPC tools do from a `.proto` file. Around SOAP grew the **WS-\*** family of standards, such as WS-Security for signing and encrypting messages, and WS-ReliableMessaging.
+
+| | SOAP | Resource-oriented HTTP (REST) |
+|---|---|---|
+| Message format | XML envelope, always | Usually JSON; any media type |
+| Contract | WSDL, required | OpenAPI, optional |
+| Operations | Named in the body, like `GetOrder` | HTTP methods on resource URLs |
+| Errors | A SOAP `Fault` in the body, usually with HTTP `500` | HTTP status codes plus problem details |
+| Caching | None: everything is a POST | Built in for GET |
+| Security | Message-level signing and encryption (WS-Security) | Transport-level TLS plus tokens |
+| Where you meet it | Banks, card and payment networks, insurers, telecoms, governments, ERP systems | Most public and modern APIs |
+
+You'll rarely design a new SOAP API, but you'll often integrate with one. Two practical details help. SOAP 1.1 sends `Content-Type: text/xml` with a `SOAPAction` header naming the operation; SOAP 1.2 uses `application/soap+xml`. And because faults usually arrive as HTTP 500, a client must parse the body to tell a business error from a server crash.
+
+<Takeaway>
+SOAP is strict, XML-based RPC with a WSDL contract: rarely chosen for new APIs, but common in the enterprise systems you integrate with.
+</Takeaway>
+
+<span id="concept-a8-3"></span>
+
+### <span class="concept-badge">A8.3</span> RPC and gRPC
+
+RPC models calls as functions (`GetOrder(id)`) rather than resources. gRPC is the common modern form: a `.proto` file defines services and messages, code generators produce typed clients and servers, and calls travel as **Protobuf** (compact binary) over **HTTP/2** ([Part 6](/part-6-http2-http3/)), always as `POST /package.Service/Method`.
+
+The status goes in an HTTP/2 *trailer* (`grpc-status`), so HTTP's status codes and caching mostly don't apply. It's great inside a company: small messages, deadlines that propagate, streaming in both directions, strict contracts. It's poor at the edge: browsers can't speak it directly and you can't debug it with curl.
+
+<Takeaway>
+gRPC gives strict contracts and speed inside your systems, at the cost of the HTTP toolbox.
+</Takeaway>
+
+<span id="concept-a8-4"></span>
+
+### <span class="concept-badge">A8.4</span> GraphQL
+
+One endpoint and a typed schema; the client sends a query naming exactly the fields it wants, across related objects, in one round trip. It solves over- and under-fetching when many clients need different shapes of the same data graph.
+
+The costs: HTTP caching mostly stops working (every query is a POST to `/graphql`); errors often come back as `200` with an `errors` array; one innocent-looking nested query can make thousands of database calls (the N+1 problem, eased with batching *dataloaders*); and servers must limit query depth and cost.
+
+<Takeaway>
+GraphQL lets each client ask for exactly what it needs, but HTTP caching and cost control get harder.
+</Takeaway>
+
+<span id="concept-a8-5"></span>
+
+### <span class="concept-badge">A8.5</span> Server-Sent Events
+
+One long-lived HTTP response with `Content-Type: text/event-stream`, to which the server keeps appending `id:`, `event:` and `data:` lines, each event ending with a blank line. Browsers support it natively (`EventSource`) and **reconnect automatically**, sending `Last-Event-ID` so the server can replay what was missed.
+
+It's one-way (server to client), but it's still plain HTTP, so authentication, proxies and load balancers work unchanged. Under HTTP/1.1 each open stream holds a connection, and browsers allow only about 6 per host; HTTP/2 multiplexing removes that limit.
+
+<Takeaway>
+SSE is a one-way, auto-reconnecting stream that stays plain HTTP.
+</Takeaway>
+
+<span id="concept-a8-6"></span>
+
+### <span class="concept-badge">A8.6</span> WebSockets
+
+An HTTP request with `Upgrade: websocket` gets `101 Switching Protocols`, after which the TCP connection carries WebSocket frames in both directions, and HTTP is gone. Use them when traffic is genuinely two-way and latency-sensitive: chat, collaborative editing, multiplayer.
+
+You give up HTTP semantics on that connection: no status codes, no per-message headers. Request ids, errors, reconnection and auth refresh become your problem. Load balancers need sticky, long-lived connections, and deploys must drain them.
+
+<Takeaway>
+WebSockets give two-way messaging and leave HTTP semantics behind.
+</Takeaway>
+
+<span id="concept-a8-7"></span>
+
+### <span class="concept-badge">A8.7</span> Webhooks and message brokers
+
+Webhooks (A7) push events to another company's HTTP server. Inside your own systems, a broker such as Kafka does the same job better: durable, replayable, ordered per partition, and consumers read at their own pace.
+
+A common shape is a broker inside the company, with webhooks or SSE at the edge for outsiders.
+
+<Takeaway>
+Use webhooks for other companies and a broker for your own services.
+</Takeaway>
+
+<span id="concept-a8-8"></span>
+
+### <span class="concept-badge">A8.8</span> Long-lived connections and operations
+
+Streams and sockets change how you run servers. Idle connections get cut by proxies, so send heartbeats (SSE comment lines such as `: keep-alive`) more often than the shortest idle timeout on the path. nginx buffers responses by default, so turn buffering off for streams (`X-Accel-Buffering: no` or `proxy_buffering off`, [Part 8](/part-8-reverse-proxy/)).
+
+Graceful shutdown waits for open requests, and a stream never finishes on its own: the lab's first Java version took 96 seconds to stop until it closed its streams first.
+
+<Takeaway>
+Streams need heartbeats, unbuffered proxies and a shutdown that closes them first.
+</Takeaway>
+
+<span id="concept-a8-9"></span>
+
+### <span class="concept-badge">A8.9</span> Choosing
+
+| Need | Style |
+|---|---|
+| Public or partner API | Resource-oriented HTTP with OpenAPI |
+| Internal service-to-service calls with strict contracts and high volume | gRPC |
+| Many front-ends over a rich data graph | GraphQL, if you can invest in its operational guardrails |
+| Live updates to clients | SSE (one-way) or WebSockets (two-way) |
+| Telling other companies something happened | Webhooks |
+| Telling your own services | A message broker |
+| Integrating with a bank, insurer or other enterprise system that exposes it | SOAP: you use what the partner offers |
+
+Mixing is normal. Many companies run gRPC inside and REST at the edge, translated by a gateway.
+
+<Takeaway>
+Choose the style per consumer; mixing styles is normal.
+</Takeaway>
+
+## Where each style came from
+
+Each style answered a problem of its time: XML-RPC and SOAP connected enterprise systems, REST and JSON opened the web, and the 2010s added real-time connections and strictly typed contracts. Knowing the order helps explain why each one looks the way it does.
+
+<ApiTimeline client:visible />
 
 ## What each style puts on the wire
 
@@ -28,7 +156,7 @@ import ApiStyles from '../../../components/diagrams/ApiStyles.tsx';
 
 Every new order publishes an `order.created` event to an append-only log. `GET /orders/events` streams the log as Server-Sent Events, and a client that reconnects with `Last-Event-ID` gets everything it missed. Storage is in memory.
 
-**Spec**
+#### Spec
 
 | # | Request | Must return |
 |---|---|---|
@@ -92,7 +220,6 @@ async def order_events(request: Request):
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-
 def frame(event: dict) -> str:
     return f"id: {event['id']}\nevent: {event['type']}\nretry: 3000\ndata: {json.dumps(event['data'])}\n\n"
 ```
@@ -102,7 +229,7 @@ Uvicorn also waits for open responses on shutdown, so run it with `--timeout-gra
 </TabItem>
 </Tabs>
 
-**Try it**
+#### Try it
 
 ```bash
 curl -N localhost:8080/orders/events               # -N: print events as they arrive
@@ -114,4 +241,11 @@ curl -N localhost:8080/orders/events -H 'Last-Event-ID: 1'    # resume after eve
 
 ## You've got it when
 
-For a given client and use case you can pick REST, gRPC, GraphQL, SSE, WebSockets or webhooks and defend the choice with the trade-offs: caching, browser support, contracts, streaming, operations. You can also describe exactly what each one sends over the wire.
+<Checkpoint>
+
+- Pick REST, gRPC, GraphQL, SSE, WebSockets or webhooks for a given client and use case.
+- Compare SOAP with REST: the contract, the errors, caching and security, and say where you’d still meet SOAP.
+- Defend the choice with the trade-offs: caching, browser support, contracts, streaming, operations.
+- Describe what each style actually sends over the wire.
+
+</Checkpoint>

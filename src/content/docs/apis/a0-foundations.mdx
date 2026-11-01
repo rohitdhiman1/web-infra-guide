@@ -1,30 +1,236 @@
 ---
 title: "A0 — Foundations"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import RequestAnatomy from '../../../components/diagrams/RequestAnatomy.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 Before methods and status codes, get the vocabulary straight. Most confusion in API discussions, and most interview follow-ups that go wrong, come from fuzzy answers to “what is a resource?” or “is this actually REST?”. This module makes those answers precise.
 
-**Concepts**
+## What an API is
 
-- **<a id="concept-a0-1" class="concept-num" href="#concept-a0-1">A0.1</a> What an API is.** An application programming interface is a contract between two programs: what one may ask, what it must send, and what it gets back. An *HTTP API* is a contract carried by HTTP requests and responses. The contract is the product. The code behind it can be rewritten, but every client depends on the contract, so changing it is expensive (module A6).
-- **<a id="concept-a0-2" class="concept-num" href="#concept-a0-2">A0.2</a> Resources and identifiers.** A *resource* is anything worth naming: an order, the collection of all orders, a customer's open orders. A URL *identifies* a resource; it isn't the resource. `/orders` names the collection and `/orders/ord_1` names one order in it. Good identifiers are stable: the same URL keeps pointing to the same thing.
-- **<a id="concept-a0-3" class="concept-num" href="#concept-a0-3">A0.3</a> Representations.** What travels over the wire is a *representation* of the resource's current state, such as a JSON document, never the resource itself. One resource can have several representations (JSON, CSV, a PDF invoice), and the client picks with `Accept` ([content negotiation, 3.10](/part-3-http11/#concept-3-10)). This is the R in REST: *representational* state transfer.
-- **<a id="concept-a0-4" class="concept-num" href="#concept-a0-4">A0.4</a> Nouns and verbs.** In a resource-oriented API, URLs are nouns and HTTP methods are the verbs: `POST /orders`, not `POST /createOrder`. The payoff is a *uniform interface*: every client, proxy and cache already knows what GET, PUT and DELETE promise ([3.2](/part-3-http11/#concept-3-2)), so they can retry, cache and log correctly without knowing your API. Some operations don't map to a noun cleanly (“recalculate shipping”). Modelling them as an action sub-resource, `POST /orders/ord_1/recalculation`, is a common and acceptable compromise. Be able to say why you chose it.
-- **<a id="concept-a0-5" class="concept-num" href="#concept-a0-5">A0.5</a> What REST actually is.** REST is an architectural style that Roy Fielding described in his 2000 dissertation as a set of constraints: client-server, stateless, cacheable, a uniform interface, a layered system, and optionally code on demand. The uniform interface includes *hypermedia*: responses carry links that tell the client what it can do next. Very few “REST APIs” follow that last part. Most are better described as **resource-oriented HTTP+JSON APIs**. Saying exactly that in an interview, and knowing why hypermedia is rarely used (clients are written against documentation anyway), is a stronger answer than claiming your API is RESTful.
-- **<a id="concept-a0-6" class="concept-num" href="#concept-a0-6">A0.6</a> The maturity ladder.** Leonard Richardson's model is a handy way to place an API. Level 0: one URL, everything is a POST (like old SOAP or JSON-RPC over HTTP). Level 1: separate resources. Level 2: resources plus proper methods and status codes. Level 3: hypermedia. Most good public APIs sit at level 2, which is where this track aims.
-- **<a id="concept-a0-7" class="concept-num" href="#concept-a0-7">A0.7</a> Statelessness.** Each request carries everything the server needs to handle it, including who the caller is (usually a token in a header). The server keeps no conversation state between requests. *Resource* state, like the orders in a database, is fine; *session* state, like “the order this user is currently editing” kept in one server's memory, isn't. Statelessness is what lets a load balancer send each request to any server ([Part 9](/part-9-load-balancing/)) and lets you add servers to scale.
-- **<a id="concept-a0-8" class="concept-num" href="#concept-a0-8">A0.8</a> JSON on the wire.** JSON has only strings, numbers, booleans, null, arrays and objects, so you decide the rest by convention. Four that matter: **money** as an integer of minor units (`1500` means €15.00) with its currency, because floats can't represent most decimal amounts exactly; **timestamps** as ISO 8601 in UTC (`2026-10-31T22:22:17Z`); **one naming style** everywhere (this track uses camelCase); and **null versus absent** treated as different things, which matters for PATCH (module A1).
-- **<a id="concept-a0-9" class="concept-num" href="#concept-a0-9">A0.9</a> Who owns which field.** The contract says which fields a client may set and which the server owns. In this track a client sends the customer, currency and items; the server decides the `id`, the `total`, the starting `status` and `createdAt`. A server that accepts a client's `total` will eventually sell something for €0.
-- **<a id="concept-a0-10" class="concept-num" href="#concept-a0-10">A0.10</a> Wrap collections in an object.** Return `{"data": [...]}`, not a bare `[...]`. An object can grow new fields later, such as a link to the next page (module A5), without breaking clients. A bare array can't.
+:::note[Definition]
+An **API (application programming interface)** is a defined set of operations that one piece of software offers to other software, together with the rules for using them: what you can ask for, how to ask, and what you get back, including when things go wrong. It's a contract. The caller relies only on that contract, never on how the provider is built inside.
+
+An **HTTP API** (or **web API**) is an API whose operations are HTTP requests and responses, called over a network.
+:::
+
+### The three words
+
+- **Application:** the two sides are programs, not people. A user interface is for humans; an API is for code.
+- **Programming:** it's used by writing code against it: a function call, a system call, an HTTP request.
+- **Interface:** the boundary between the two. Each side can change its insides freely as long as the boundary stays the same. That's the whole point.
+
+### APIs you already use
+
+| Kind | Example | The contract is… |
+|---|---|---|
+| Library API | Java's `List.add(e)`, Python's `json.loads(s)` | Function names, parameter and return types, exceptions |
+| Operating-system API | `socket()`, `bind()`, `accept()` ([Part 2](/part-2-linux/)) | System calls and their error codes |
+| HTTP API | `POST /orders` on a payments service | URLs, methods, headers, JSON bodies, status codes |
+
+### What an HTTP API's contract spells out
+
+| Part | Examples |
+|---|---|
+| Operations | URL + method: `POST /orders`, `GET /orders/{id}` |
+| Inputs | Path and query parameters, headers, request body |
+| Outputs | Status code, headers, response body |
+| Errors | Every failure the client can get, and what each one means |
+| Rules | Authentication, limits, versioning |
+
+The rest of this track is about designing each of those parts well.
+
+## Concepts
+
+<span id="concept-a0-1"></span>
+
+### <span class="concept-badge">A0.1</span> The API is the contract
+
+The API is the agreement, not the code behind it. For an HTTP API, the contract is the URLs, methods, headers, bodies and status codes that clients depend on.
+
+The code can be rewritten at any time. The contract can't, because every client was written against it. That's what makes changing a contract expensive (module A6).
+
+<Takeaway>
+Design the contract carefully; it will outlive the code.
+</Takeaway>
+
+<span id="concept-a0-2"></span>
+
+### <span class="concept-badge">A0.2</span> Resources and identifiers
+
+A *resource* is anything worth naming. A URL *identifies* a resource; it isn't the resource itself.
+
+| URL | Identifies |
+|---|---|
+| `/orders` | the collection of all orders |
+| `/orders/ord_1` | one order in that collection |
+| `/customers/c_7/orders` | one customer's orders |
+
+Good identifiers are stable: the same URL keeps pointing at the same thing.
+
+<Takeaway>
+URLs name things. They don't describe actions.
+</Takeaway>
+
+<span id="concept-a0-3"></span>
+
+### <span class="concept-badge">A0.3</span> Representations
+
+What crosses the wire is a *representation* of the resource's current state, never the resource itself. One order can have several:
+
+| Representation | Content-Type |
+|---|---|
+| The order as JSON | `application/json` |
+| A row for a spreadsheet export | `text/csv` |
+| A printable invoice | `application/pdf` |
+
+The client says which it wants with the `Accept` header ([content negotiation, 3.10](/part-3-http11/#concept-3-10)). This is the R in REST: *representational* state transfer.
+
+<Takeaway>
+The resource lives on the server; clients only ever see representations of it.
+</Takeaway>
+
+<span id="concept-a0-4"></span>
+
+### <span class="concept-badge">A0.4</span> Nouns and verbs
+
+In a resource-oriented API, URLs are nouns and HTTP methods are the verbs.
+
+| ✗ Avoid: verbs in the URL | ✓ Prefer: a noun plus a method |
+|---|---|
+| `POST /createOrder` | `POST /orders` |
+| `GET /getOrder?id=ord_1` | `GET /orders/ord_1` |
+| `POST /deleteOrder` | `DELETE /orders/ord_1` |
+
+The payoff is a *uniform interface*. Every client, proxy and cache already knows what GET, PUT and DELETE promise ([3.2](/part-3-http11/#concept-3-2)), so they can retry, cache and log correctly without knowing anything about your API.
+
+Some operations don't map cleanly to a noun, such as “recalculate shipping”. Modelling them as an action sub-resource, `POST /orders/ord_1/recalculation`, is a common and acceptable compromise. Be ready to say why you chose it.
+
+<Takeaway>
+Nouns in the URL, verbs in the method.
+</Takeaway>
+
+<span id="concept-a0-5"></span>
+
+### <span class="concept-badge">A0.5</span> What REST actually is
+
+REST is an architectural style that Roy Fielding described in his 2000 dissertation. It's defined by a set of constraints:
+
+- **Client-server:** the two sides evolve separately.
+- **Stateless:** each request stands on its own (A0.7).
+- **Cacheable:** responses say whether they can be reused.
+- **Uniform interface:** resources, representations, standard methods, and *hypermedia*.
+- **Layered system:** proxies, gateways and caches can sit in between.
+- **Code on demand** (optional): the server can send code to run.
+
+Hypermedia is where most APIs stop. It means responses carry links telling the client what it can do next. Very few “REST APIs” do this, because clients are written against documentation anyway.
+
+Most APIs are better described as **resource-oriented HTTP+JSON APIs**. Saying exactly that in an interview, and knowing why hypermedia is rarely used, is a stronger answer than claiming your API is “RESTful”.
+
+<Takeaway>
+REST is a set of constraints. Most real APIs follow some of them, and that's fine if you can say which.
+</Takeaway>
+
+<span id="concept-a0-6"></span>
+
+### <span class="concept-badge">A0.6</span> The maturity ladder
+
+Leonard Richardson's model is a handy way to place an API:
+
+| Level | What it means | Example |
+|---|---|---|
+| 0 | One URL; everything is a POST | SOAP, JSON-RPC over HTTP |
+| 1 | Separate resources, but methods used loosely | `/orders`, `/customers`, mostly POST |
+| 2 | Resources plus proper methods and status codes | Most good public APIs; **this track's target** |
+| 3 | Hypermedia: responses link to the next actions | Rare |
+
+<Takeaway>
+Aim for level 2, and know what level 3 would add.
+</Takeaway>
+
+<span id="concept-a0-7"></span>
+
+### <span class="concept-badge">A0.7</span> Statelessness
+
+Each request carries everything the server needs to handle it, including who the caller is (usually a token in a header). The server keeps no *conversation* state between requests.
+
+| | Example | OK? |
+|---|---|---|
+| Resource state | The orders stored in a database | ✓ Yes |
+| Session state | “The order this user is editing”, kept in one server's memory | ✗ No |
+
+Statelessness is what lets a load balancer send each request to any server ([Part 9](/part-9-load-balancing/)), and lets you scale by adding servers.
+
+<Takeaway>
+Any server should be able to answer any request.
+</Takeaway>
+
+<span id="concept-a0-8"></span>
+
+### <span class="concept-badge">A0.8</span> JSON on the wire
+
+JSON has only six types: strings, numbers, booleans, null, arrays and objects. Everything else is a convention you choose. Four matter most:
+
+| Convention | Example | Why |
+|---|---|---|
+| Money as integer minor units, with its currency | `"unitPrice": 1500, "currency": "EUR"` (€15.00) | Floats can't represent most decimal amounts exactly: `0.1 + 0.2` isn't `0.3` |
+| Timestamps in ISO 8601, UTC | `"createdAt": "2026-10-31T22:22:17Z"` | No guessing about time zones |
+| One naming style everywhere | `unitPrice`, `createdAt` (camelCase in this track) | Clients can map fields automatically |
+| `null` and absent mean different things | `"note": null` ≠ no `note` key | Matters for PATCH (module A1) |
+
+<Takeaway>
+Decide these conventions once, write them down, and apply them everywhere.
+</Takeaway>
+
+<span id="concept-a0-9"></span>
+
+### <span class="concept-badge">A0.9</span> Who owns which field
+
+The contract says which fields a client may set and which the server owns:
+
+| Field | Set by | Why |
+|---|---|---|
+| `customer`, `currency`, `items` | Client | Only the client knows what it wants to order |
+| `id` | Server | Ids must be unique and unguessable |
+| `total` | Server | Computed from the items; never trust a client with a price |
+| `status` (initially) | Server | Every order starts as `pending` |
+| `createdAt` | Server | The server's clock is the one that counts |
+
+A server that accepts a client's `total` will eventually sell something for €0.
+
+<Takeaway>
+If the server can compute it or must guarantee it, the server owns it.
+</Takeaway>
+
+<span id="concept-a0-10"></span>
+
+### <span class="concept-badge">A0.10</span> Wrap collections in an object
+
+```json
+// ✗ A bare array: it can never grow
+[ { "id": "ord_1" }, { "id": "ord_2" } ]
+
+// ✓ Wrapped in an object
+{ "data": [ { "id": "ord_1" }, { "id": "ord_2" } ] }
+
+// ✓ Later: a next-page link, and no client breaks
+{ "data": [ ... ], "next": "/orders?cursor=aWQ6MTU" }
+```
+
+An object can grow new fields later, such as a link to the next page (module A5), without breaking clients. A bare array can't.
+
+<Takeaway>
+Always return `{"data": [...]}`, even when you don't need anything else yet.
+</Takeaway>
 
 ## A request, piece by piece
 
-The same order being created, as raw HTTP. Click each part to see what it does and who decides it.
+The same order, created with a POST and then read back with a GET, as raw HTTP. Click any part to see what it does and who decides it, then switch exchange to see how that part changes. Parts that exist in only one of the two stay visible as faded lines.
 
 <RequestAnatomy client:visible />
 
@@ -32,7 +238,7 @@ The same order being created, as raw HTTP. Click each part to see what it does a
 
 Build the smallest useful orders API. Orders live in memory; data disappears when the process stops, which is fine until module A3.
 
-**Spec**
+#### Spec
 
 | Request | Must return |
 |---|---|
@@ -41,7 +247,7 @@ Build the smallest useful orders API. Orders live in memory; data disappears whe
 | `GET /orders/ord_999999` | `404 Not Found` with a JSON body containing an `error` string |
 | `GET /orders` | `200 OK` with `{"data": [ ...orders ]}` |
 
-The order representation:
+#### The order representation
 
 ```json
 {
@@ -55,7 +261,7 @@ The order representation:
 }
 ```
 
-**The create endpoint**
+#### The create endpoint
 
 <Tabs syncKey="lab-lang">
 <TabItem label="Java (Spring Boot)">
@@ -126,7 +332,7 @@ class OrderItem(ApiModel):
 </TabItem>
 </Tabs>
 
-**Try it with curl**
+#### Try it with curl
 
 Run your server, then watch the raw exchange. `-i` prints the response headers; `-v` also shows what curl sent.
 
@@ -140,7 +346,7 @@ curl -i localhost:8080/orders/ord_1
 curl -i localhost:8080/orders/ord_999999
 ```
 
-Things to notice:
+#### Things to notice
 
 - The Spring Boot (Tomcat) server answers `HTTP/1.1 201`, with nothing after the code. The reason phrase is optional, and clients ignore it.
 - Spring sends the body with `Transfer-Encoding: chunked` rather than `Content-Length` ([chunked encoding, 3.7](/part-3-http11/#concept-3-7)). Both are valid ways to frame a body.
@@ -148,4 +354,10 @@ Things to notice:
 
 ## You've got it when
 
-You can explain, without notes, the difference between a resource, its identifier and its representation; say honestly whether a given API is “RESTful” and what level it reaches; and justify each field-ownership and JSON decision in the order representation above.
+<Checkpoint>
+
+- Explain the difference between a resource, its identifier and its representation.
+- Say honestly whether a given API is “RESTful”, and which maturity level it reaches.
+- Justify every field-ownership and JSON decision in the order representation above.
+
+</Checkpoint>

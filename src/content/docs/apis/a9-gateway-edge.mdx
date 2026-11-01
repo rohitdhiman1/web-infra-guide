@@ -1,25 +1,128 @@
 ---
 title: "A9 — The gateway and the edge"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import RateLimiterCompare from '../../../components/diagrams/RateLimiterCompare.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 Some concerns apply to every endpoint: limiting how much each client may call, tracing a request across services, letting the right browser apps in, and terminating TLS. They belong in one place, an **API gateway** (or a shared middleware layer), not copied into every handler. This module covers what that layer does, and builds three of its jobs into the orders API.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-a9-1" class="concept-num" href="#concept-a9-1">A9.1</a> What a gateway does.** An API gateway is a reverse proxy ([Part 8](/part-8-reverse-proxy/)) specialised for APIs: TLS termination, authentication, rate limits and quotas, request ids and logging, CORS, routing by path or version, request-size limits, and sometimes translation (REST outside, gRPC inside). Examples: nginx or Envoy with configuration, Kong, AWS API Gateway, or a framework middleware stack. The rule: anything every endpoint needs, and that doesn't depend on business logic, belongs there.
-- **<a id="concept-a9-2" class="concept-num" href="#concept-a9-2">A9.2</a> Why rate limit.** To protect the service from overload and abuse, to share capacity fairly between clients (one runaway script shouldn't hurt everyone), and to enforce paid tiers. Limit per *client identity* (API key, user, account), falling back to IP address only when there's no identity. Behind a proxy the remote address is the proxy itself, so trust `X-Forwarded-For` only when your own proxy set it ([3.16](/part-3-http11/#concept-3-16)).
-- **<a id="concept-a9-3" class="concept-num" href="#concept-a9-3">A9.3</a> The algorithms.** **Fixed window**: count per calendar second or minute. Simple, but allows twice the limit across a boundary. **Sliding window**: count over the last N seconds. Exact if you keep a log of timestamps, approximate (and cheap) if you blend the current and previous window counts. **Token bucket**: tokens refill at a steady rate up to a capacity, and each request spends one, so bursts up to the capacity are allowed while the average stays at the rate. Most APIs use this. **Leaky bucket**: requests queue and are released at a steady rate, smoothing traffic but adding delay. That's nginx's `limit_req` ([Part 10](/part-10-caching-security/)).
-- **<a id="concept-a9-4" class="concept-num" href="#concept-a9-4">A9.4</a> Saying no well.** Refuse with **429 Too Many Requests**, a `Retry-After` header, and a problem body (A2), and tell well-behaved clients their budget *before* they hit it: the lab sends `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response. These `X-` headers are a common convention, not a standard. An IETF draft is standardising the information as `RateLimit` and `RateLimit-Policy` fields, so check what your gateway emits. Good clients slow down when the budget runs low, and back off with jitter after a 429 (A3).
-- **<a id="concept-a9-5" class="concept-num" href="#concept-a9-5">A9.5</a> Distributed limits.** A limiter in each server's memory multiplies the limit by the number of servers behind the load balancer. Shared limits need shared state, usually Redis, updated atomically (a Lua script or `INCR` with expiry), or a limiter in the gateway that all traffic passes through. A shared store adds latency and a dependency to every request, so decide what happens when it's down: *fail open* (allow, and risk overload) or *fail closed* (reject, and cause an outage). Most choose fail open with a local fallback limit.
-- **<a id="concept-a9-6" class="concept-num" href="#concept-a9-6">A9.6</a> Request ids.** Give every request an id at the edge, return it in a header (`X-Request-Id`), put it in every log line and every error body, and forward it to every downstream call. A user who reports “error, request id abc-123” then leads you straight to the logs on every service it touched. Accept a caller's id only if it matches a strict pattern: it ends up in your logs, so unvalidated input there is a log-injection risk. The W3C *Trace Context* standard (`traceparent` header) does the same job for distributed tracing systems such as OpenTelemetry ([Part 12](/part-12-observability/)).
-- **<a id="concept-a9-7" class="concept-num" href="#concept-a9-7">A9.7</a> CORS for APIs.** Browsers block JavaScript on one origin from reading responses from another, unless the server allows it with CORS headers ([3.15](/part-3-http11/#concept-3-15)). For a request that isn't “simple” (JSON bodies, custom headers like `X-API-Key`), the browser first sends a **preflight** `OPTIONS` asking permission, and only sends the real request if the answer allows that origin, method and those headers. List exact origins, never reflect whatever `Origin` arrives (especially with credentials), use `Access-Control-Max-Age` to cache preflights, and `Access-Control-Expose-Headers` for headers your JavaScript must read. CORS protects *users* from malicious websites. It doesn't protect your API from curl or servers; that's what auth and rate limits are for.
-- **<a id="concept-a9-8" class="concept-num" href="#concept-a9-8">A9.8</a> TLS at the edge and behind it.** The gateway usually terminates the client's TLS connection ([5.14](/part-5-tls/#concept-5-14)). Behind it, the traffic either continues in plain HTTP on a trusted network, or is re-encrypted, often as **mutual TLS** ([5.15](/part-5-tls/#concept-5-15)) so each service can prove its identity to the next. A service mesh such as Istio or Linkerd automates that mTLS between services. Whatever the gateway learned about the client (verified identity, original IP, protocol) has to travel inward in headers that the backend trusts *only* from the gateway.
-- **<a id="concept-a9-9" class="concept-num" href="#concept-a9-9">A9.9</a> Other edge limits.** Maximum body size (413, [Part 8](/part-8-reverse-proxy/)), maximum header size (431), request timeouts (408, or 504 from a proxy), and connection limits. Each one stops a whole class of abuse cheaply, before it reaches your application code.
+<span id="concept-a9-1"></span>
+
+### <span class="concept-badge">A9.1</span> What a gateway does
+
+An API gateway is a reverse proxy ([Part 8](/part-8-reverse-proxy/)) specialised for APIs: TLS termination, authentication ([A10](/apis/a10-security/)), rate limits and quotas, request ids and logging, CORS, routing by path or version, request-size limits, and sometimes translation (REST outside, gRPC inside).
+
+Examples: nginx or Envoy with configuration, Kong, AWS API Gateway, or a framework middleware stack. The rule: anything every endpoint needs, and that doesn't depend on business logic, belongs there.
+
+<Takeaway>
+Anything every endpoint needs, and that isn't business logic, belongs in the gateway.
+</Takeaway>
+
+<span id="concept-a9-2"></span>
+
+### <span class="concept-badge">A9.2</span> Why rate limit
+
+To protect the service from overload and abuse, to share capacity fairly between clients (one runaway script shouldn't hurt everyone), and to enforce paid tiers. Limit per *client identity* (API key, user, account), falling back to IP address only when there's no identity.
+
+Behind a proxy the remote address is the proxy itself, so trust `X-Forwarded-For` only when your own proxy set it ([3.16](/part-3-http11/#concept-3-16)).
+
+<Takeaway>
+Rate limits protect capacity and fairness; key them on a client identity.
+</Takeaway>
+
+<span id="concept-a9-3"></span>
+
+### <span class="concept-badge">A9.3</span> The algorithms
+
+| Algorithm | How it works | Strength | Weakness |
+|---|---|---|---|
+| Fixed window | Count per calendar second or minute | Simple | Allows twice the limit across a boundary |
+| Sliding window | Count over the last N seconds | Exact with a log of timestamps; cheap if you blend two window counts | The exact version stores every timestamp |
+| Token bucket | Tokens refill at a steady rate up to a capacity; each request spends one | Bursts up to the capacity, a steady average. What most APIs use | Needs two numbers per client |
+| Leaky bucket | Requests queue and leave at a steady rate | Smooth traffic | Adds delay. This is nginx's `limit_req` ([Part 10](/part-10-caching-security/)) |
+
+<Takeaway>
+Token bucket is the usual choice: bursts up to a capacity, a steady average rate.
+</Takeaway>
+
+<span id="concept-a9-4"></span>
+
+### <span class="concept-badge">A9.4</span> Saying no well
+
+Refuse with **429 Too Many Requests**, a `Retry-After` header, and a problem body (A2), and tell well-behaved clients their budget *before* they hit it: the lab sends `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response. These `X-` headers are a common convention, not a standard.
+
+An IETF draft is standardising the information as `RateLimit` and `RateLimit-Policy` fields, so check what your gateway emits. Good clients slow down when the budget runs low, and back off with jitter after a 429 (A3).
+
+<Takeaway>
+Refuse with 429 and Retry-After, and show the remaining budget before it runs out.
+</Takeaway>
+
+<span id="concept-a9-5"></span>
+
+### <span class="concept-badge">A9.5</span> Distributed limits
+
+A limiter in each server's memory multiplies the limit by the number of servers behind the load balancer. Shared limits need shared state, usually Redis, updated atomically (a Lua script or `INCR` with expiry), or a limiter in the gateway that all traffic passes through.
+
+A shared store adds latency and a dependency to every request, so decide what happens when it's down: *fail open* (allow, and risk overload) or *fail closed* (reject, and cause an outage). Most choose fail open with a local fallback limit.
+
+<Takeaway>
+In-memory limits multiply with instances; shared limits need a shared store and a failure policy.
+</Takeaway>
+
+<span id="concept-a9-6"></span>
+
+### <span class="concept-badge">A9.6</span> Request ids
+
+Give every request an id at the edge, return it in a header (`X-Request-Id`), put it in every log line and every error body, and forward it to every downstream call. A user who reports “error, request id abc-123” then leads you straight to the logs on every service it touched.
+
+Accept a caller's id only if it matches a strict pattern: it ends up in your logs, so unvalidated input there is a log-injection risk. The W3C *Trace Context* standard (`traceparent` header) does the same job for distributed tracing systems such as OpenTelemetry ([Part 12](/part-12-observability/)).
+
+<Takeaway>
+One request id, everywhere: in the response, the logs, the errors and downstream calls.
+</Takeaway>
+
+<span id="concept-a9-7"></span>
+
+### <span class="concept-badge">A9.7</span> CORS for APIs
+
+Browsers block JavaScript on one origin from reading responses from another, unless the server allows it with CORS headers ([3.15](/part-3-http11/#concept-3-15)). For a request that isn't “simple”
+
+(JSON bodies, custom headers like `X-API-Key`), the browser first sends a **preflight** `OPTIONS` asking permission, and only sends the real request if the answer allows that origin, method and those headers. List exact origins, never reflect whatever `Origin` arrives (especially with credentials), use `Access-Control-Max-Age` to cache preflights, and `Access-Control-Expose-Headers` for headers your JavaScript must read.
+
+CORS protects *users* from malicious websites. It doesn't protect your API from curl or servers; that's what auth and rate limits are for.
+
+<Takeaway>
+CORS protects users from other websites; it doesn't protect your API from servers.
+</Takeaway>
+
+<span id="concept-a9-8"></span>
+
+### <span class="concept-badge">A9.8</span> TLS at the edge and behind it
+
+The gateway usually terminates the client's TLS connection ([5.14](/part-5-tls/#concept-5-14)). Behind it, the traffic either continues in plain HTTP on a trusted network, or is re-encrypted, often as **mutual TLS** ([5.15](/part-5-tls/#concept-5-15)) so each service can prove its identity to the next.
+
+A service mesh such as Istio or Linkerd automates that mTLS between services. Whatever the gateway learned about the client (verified identity, original IP, protocol) has to travel inward in headers that the backend trusts *only* from the gateway.
+
+<Takeaway>
+TLS usually ends at the gateway; re-encrypt or use mTLS behind it if the network isn't trusted.
+</Takeaway>
+
+<span id="concept-a9-9"></span>
+
+### <span class="concept-badge">A9.9</span> Other edge limits
+
+Maximum body size (413, [Part 8](/part-8-reverse-proxy/)), maximum header size (431), request timeouts (408, or 504 from a proxy), and connection limits. Each one stops a whole class of abuse cheaply, before it reaches your application code.
+
+<Takeaway>
+Cheap limits at the edge stop whole classes of abuse before they reach your code.
+</Takeaway>
 
 ## Four rate limiters, one stream of traffic
 
@@ -31,7 +134,9 @@ Each dot is a request. Watch the fixed window at the 1-second boundary, and the 
 
 The endpoints are deliberately trivial (`GET /orders` returns an empty list, `GET /orders/{id}` returns 404). The work is in the layer around them: filters in Spring, middleware in FastAPI. Order matters. Request ids go outermost, so even a 429 or a CORS rejection carries an id, and CORS preflights never reach the rate limiter.
 
-**Spec** (token bucket: capacity 5, refill 1 per second, per `X-API-Key`)
+#### Spec
+
+(token bucket: capacity 5, refill 1 per second, per `X-API-Key`)
 
 | # | Request | Must return |
 |---|---|---|
@@ -109,11 +214,9 @@ async def rate_limit(request: Request, call_next):
     response.headers.update(limits)
     return response
 
-
 app.add_middleware(CORSMiddleware, allow_origins=["https://shop.example.com"], allow_methods=["GET", "POST"],
                    allow_headers=["Content-Type", "X-API-Key", "X-Request-Id"],
                    expose_headers=["X-Request-Id", "X-RateLimit-Remaining", "Retry-After"], max_age=600)
-
 
 @app.middleware("http")                                       # added last, so runs first
 async def request_id(request: Request, call_next):
@@ -127,7 +230,7 @@ async def request_id(request: Request, call_next):
 </TabItem>
 </Tabs>
 
-**Try it**
+#### Try it
 
 ```bash
 for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' -H 'X-API-Key: demo' localhost:8080/orders; done; echo
@@ -137,4 +240,12 @@ curl -si -X OPTIONS localhost:8080/orders -H 'Origin: https://shop.example.com' 
 
 ## You've got it when
 
-You can list what belongs in a gateway and why; compare fixed window, sliding window, token bucket and leaky bucket, including the boundary problem; design a limit shared across many servers and say what happens when its store is down; explain how a request id ties logs together; and walk through a CORS preflight, saying what CORS does and doesn't protect.
+<Checkpoint>
+
+- List what belongs in a gateway, and why.
+- Compare fixed window, sliding window, token bucket and leaky bucket, including the boundary problem.
+- Design a limit shared across many servers, and say what happens when its store is down.
+- Explain how a request id ties logs together.
+- Walk through a CORS preflight, and say what CORS does and doesn't protect.
+
+</Checkpoint>

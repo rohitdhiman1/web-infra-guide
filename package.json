@@ -10,7 +10,9 @@
     "deploy": "astro build && wrangler deploy",
     "split-guide": "node scripts/split-guide.mjs",
     "check": "astro check",
-    "check-links": "node scripts/check-links.mjs"
+    "check-links": "node scripts/check-links.mjs",
+    "check-format": "node scripts/check-format.mjs",
+    "new-page": "node scripts/new-page.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^7.1.2",

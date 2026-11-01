@@ -1,17 +1,29 @@
 ---
 title: "A1 — HTTP semantics for APIs"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import StatusCodeTree from '../../../components/diagrams/StatusCodeTree.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 Every method makes a promise, and every status code tells the client what to do next. Clients, proxies, caches and retry libraries all act on those promises without knowing anything about your API. Get them right and the whole HTTP ecosystem works for you; get them wrong and a retry creates a duplicate order or a cache serves stale data. Part 3 introduced [methods (3.2)](/part-3-http11/#concept-3-2) and [status codes (3.3)](/part-3-http11/#concept-3-3); this module is about choosing them when you design an API.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-a1-1" class="concept-num" href="#concept-a1-1">A1.1</a> Safe, idempotent, cacheable.** *Safe* means the client asked for no change (GET, HEAD, OPTIONS). *Idempotent* means sending the same request twice leaves the server in the same state as sending it once (all safe methods, plus PUT and DELETE). *Cacheable* means a response may be stored and reused (GET and HEAD in practice). Idempotency is about the **effect on server state**, not the response: a second DELETE can return 404 and still be idempotent. These properties are why a proxy may retry a GET after a dropped connection but must never blindly retry a POST.
+<span id="concept-a1-1"></span>
+
+### <span class="concept-badge">A1.1</span> Safe, idempotent, cacheable
+
+Three properties decide what clients, proxies and caches may do with a request:
+
+- **Safe:** the client asked for no change (GET, HEAD, OPTIONS).
+- **Idempotent:** sending the same request twice leaves the server in the same state as sending it once (all safe methods, plus PUT and DELETE).
+- **Cacheable:** a response may be stored and reused (GET and HEAD in practice).
+
+Idempotency is about the **effect on server state**, not the response: a second DELETE can return 404 and still be idempotent. These properties are why a proxy may retry a GET after a dropped connection, but must never blindly retry a POST.
 
 | Method | Safe | Idempotent | Typical use in this API |
 |---|---|---|---|
@@ -23,21 +35,199 @@ Every method makes a promise, and every status code tells the client what to do 
 | PATCH | no | not by definition | Change some fields of an order |
 | DELETE | no | yes | Remove an order |
 
-- **<a id="concept-a1-2" class="concept-num" href="#concept-a1-2">A1.2</a> POST creates, and isn't idempotent.** `POST /orders` asks the collection to create a new member; the server picks the id. Answer `201 Created` with a `Location` header pointing at the new resource. Two identical POSTs create two orders. That's correct behaviour, and also the root of the duplicate-payment problem that idempotency keys solve in module A3.
-- **<a id="concept-a1-3" class="concept-num" href="#concept-a1-3">A1.3</a> PUT replaces.** `PUT /orders/ord_1` sends the *complete* new state of everything the client owns. Leave a field out and it's missing, not unchanged, so the strict answer is 422. Because the result is fully described by the request, PUT is idempotent: send it ten times, get the same order. PUT can also *create* when the client chooses the id (`PUT /carts/my-cart-id`). This API uses server-chosen ids, so PUT to an unknown order is 404.
-- **<a id="concept-a1-4" class="concept-num" href="#concept-a1-4">A1.4</a> PATCH changes part of a resource.** PATCH sends a description of a change, and its `Content-Type` says which description language. **JSON Merge Patch** (RFC 7396, `application/merge-patch+json`) looks like the resource: `{"customer": "x@example.com"}` changes one field, and `null` means “remove this field”. **JSON Patch** (RFC 6902, `application/json-patch+json`) is a list of operations like `{"op": "add", "path": "/items/-", ...}`. Merge Patch is simpler and covers most needs; JSON Patch can do things Merge Patch can't, such as appending to an array. PATCH isn't idempotent *by definition*: Merge Patch usually is, but JSON Patch's “append an item” isn't. If you don't support a patch format, answer 415 and list the ones you do in `Accept-Patch`.
-- **<a id="concept-a1-5" class="concept-num" href="#concept-a1-5">A1.5</a> DELETE.** Removes the resource. Answer `204 No Content`. A repeated DELETE finds nothing; this API answers 404, and some APIs answer 204 again so retries look identical. Both are defensible. Pick one and document it.
-- **<a id="concept-a1-6" class="concept-num" href="#concept-a1-6">A1.6</a> GET must never change anything.** Browsers prefetch links, crawlers follow them, monitoring tools poll them, and proxies retry them. A `GET /orders/ord_1/cancel` *will* get called by something that didn't mean it. Support **HEAD** for every GET (same headers, no body): monitoring and link checkers use it.
-- **<a id="concept-a1-7" class="concept-num" href="#concept-a1-7">A1.7</a> Status codes in classes.** The first digit is the contract: 2xx “it worked”, 3xx “look elsewhere”, 4xx “you (the client) need to change something”, 5xx “we failed; the same request may work later”. Clients must handle any code by its class even if they don't know it, so a sensible client treats an unfamiliar 418 like a 400. The **reason phrase** after the number is decoration: clients must ignore it, Tomcat leaves it out entirely, and HTTP/2 doesn't have one.
-- **<a id="concept-a1-8" class="concept-num" href="#concept-a1-8">A1.8</a> 400 vs 422.** 400 Bad Request: the server can't even parse the request, such as broken JSON. 422 Unprocessable Content: it parsed fine but breaks the rules, like a quantity of 0, a missing customer or a quantity sent as `"two"`. RFC 9110 made 422 part of core HTTP in 2022 (it used to be WebDAV-only), and its name changed from “Unprocessable Entity”. Some APIs use 400 for everything; separating them tells the client whether to fix its JSON serializer or its data.
-- **<a id="concept-a1-9" class="concept-num" href="#concept-a1-9">A1.9</a> 401 vs 403 vs 404.** 401 Unauthorized actually means *unauthenticated*: no valid credentials, and the response must carry `WWW-Authenticate` saying how to authenticate. 403 Forbidden: the server knows who you are, and the answer is still no. When even confirming that a resource exists would leak information (someone else's order), answer 404 instead. Auth is a whole module later in the course; for now, know which code means what.
-- **<a id="concept-a1-10" class="concept-num" href="#concept-a1-10">A1.10</a> 404 vs 405 vs 410.** 404: nothing at this URL. 405 Method Not Allowed: the resource exists but not for this method, and the response **must** include `Allow` listing what does work. 410 Gone: it existed and was removed on purpose, so clients may forget the URL; rarely worth the bookkeeping.
-- **<a id="concept-a1-11" class="concept-num" href="#concept-a1-11">A1.11</a> 406 vs 415.** Both are about formats, in opposite directions. 406 Not Acceptable: the client's `Accept` header rules out every format you can *produce*. 415 Unsupported Media Type: the request's `Content-Type` is a format you can't *consume*. Many APIs ignore `Accept` and always send JSON. That's common, but being strict catches client bugs early.
-- **<a id="concept-a1-12" class="concept-num" href="#concept-a1-12">A1.12</a> 409 vs 412 vs 422.** 422: the request is invalid on its own. 409 Conflict: the request is valid but clashes with the resource's *current state*, such as editing an order that's already cancelled. 412 Precondition Failed: the client made the request conditional (“only if it's still version 7”, with `If-Match`) and the condition is false. That's the cure for lost updates in module A4.
-- **<a id="concept-a1-13" class="concept-num" href="#concept-a1-13">A1.13</a> Choosing the 2xx.** 200 OK: here's the result. 201 Created: a new resource, at `Location`. 202 Accepted: you'll do it later, so give the client somewhere to check progress (module A7). 204 No Content: done, nothing to say, and there must be no body.
-- **<a id="concept-a1-14" class="concept-num" href="#concept-a1-14">A1.14</a> 5xx means “not your fault”.** 500 is what happens when your code throws; never send it on purpose for a client mistake, because clients and load balancers treat 5xx as a reason to retry or fail over. 503 Service Unavailable: overloaded or in maintenance, ideally with `Retry-After`. 502 and 504 come from a proxy in front of you ([3.4](/part-3-http11/#concept-3-4)).
-- **<a id="concept-a1-15" class="concept-num" href="#concept-a1-15">A1.15</a> The headers an API must get right.** `Content-Type` on every body. `Location` on 201. `Allow` on 405. `Accept-Patch` on a PATCH 415. `Retry-After` on 429 and 503. `WWW-Authenticate` on 401. Later modules add `ETag` and `If-Match` (A4), `Idempotency-Key` (A3), `Cache-Control` (A4) and request ids (A9).
-- **<a id="concept-a1-16" class="concept-num" href="#concept-a1-16">A1.16</a> Make state changes safe to repeat.** A client whose “cancel” request timed out doesn't know whether it worked, so it sends it again. If the second cancel returns 409 (“already cancelled”), the client sees an error for something that succeeded. Treat a request that would leave the resource exactly as it is as a no-op success (200). Reserve 409 for changes that would *actually* change a resource that can't change. This is the same idea A3 generalises to POST.
+<Takeaway>
+Idempotency is about the effect on the server, not the response; it's what tells clients and proxies what they may repeat.
+</Takeaway>
+
+<span id="concept-a1-2"></span>
+
+### <span class="concept-badge">A1.2</span> POST creates, and isn't idempotent
+
+`POST /orders` asks the collection to create a new member; the server picks the id. Answer `201 Created` with a `Location` header pointing at the new resource.
+
+Two identical POSTs create two orders. That's correct behaviour, and also the root of the duplicate-payment problem that idempotency keys solve in module A3.
+
+<Takeaway>
+POST to a collection creates a new member: answer 201 with Location, and expect duplicates if it's retried.
+</Takeaway>
+
+<span id="concept-a1-3"></span>
+
+### <span class="concept-badge">A1.3</span> PUT replaces
+
+`PUT /orders/ord_1` sends the *complete* new state of everything the client owns. Leave a field out and it's missing, not unchanged, so the strict answer is 422.
+
+Because the result is fully described by the request, PUT is idempotent: send it ten times, get the same order. PUT can also *create* when the client chooses the id (`PUT /carts/my-cart-id`). This API uses server-chosen ids, so PUT to an unknown order is 404.
+
+<Takeaway>
+PUT sends the complete new state, so sending it twice changes nothing more.
+</Takeaway>
+
+<span id="concept-a1-4"></span>
+
+### <span class="concept-badge">A1.4</span> PATCH changes part of a resource
+
+PATCH sends a description of a change, and its `Content-Type` says which description language. **JSON Merge Patch** (RFC 7396, `application/merge-patch+json`) looks like the resource: `{"customer": "x@example.com"}` changes one field, and `null` means “remove this field”.
+
+**JSON Patch** (RFC 6902, `application/json-patch+json`) is a list of operations like `{"op": "add", "path": "/items/-", ...}`. Merge Patch is simpler and covers most needs; JSON Patch can do things Merge Patch can't, such as appending to an array. PATCH isn't idempotent *by definition*: Merge Patch usually is, but JSON Patch's “append an item” isn't.
+
+If you don't support a patch format, answer 415 and list the ones you do in `Accept-Patch`.
+
+<Takeaway>
+PATCH sends a change, and its Content-Type names the patch format; Merge Patch covers most needs.
+</Takeaway>
+
+<span id="concept-a1-5"></span>
+
+### <span class="concept-badge">A1.5</span> DELETE
+
+Removes the resource. Answer `204 No Content`.
+
+A repeated DELETE finds nothing; this API answers 404, and some APIs answer 204 again so retries look identical. Both are defensible. Pick one and document it.
+
+<Takeaway>
+DELETE answers 204; choose whether a repeat gives 404 or 204, and document it.
+</Takeaway>
+
+<span id="concept-a1-6"></span>
+
+### <span class="concept-badge">A1.6</span> GET must never change anything
+
+Browsers prefetch links, crawlers follow them, monitoring tools poll them, and proxies retry them. A `GET /orders/ord_1/cancel` *will* get called by something that didn't mean it.
+
+Support **HEAD** for every GET (same headers, no body): monitoring and link checkers use it.
+
+<Takeaway>
+If a request changes anything, it isn't a GET.
+</Takeaway>
+
+<span id="concept-a1-7"></span>
+
+### <span class="concept-badge">A1.7</span> Status codes in classes
+
+The first digit is the contract: 2xx “it worked”, 3xx “look elsewhere”, 4xx “you (the client) need to change something”, 5xx “we failed; the same request may work later”. Clients must handle any code by its class even if they don't know it, so a sensible client treats an unfamiliar 418 like a 400.
+
+The **reason phrase** after the number is decoration: clients must ignore it, Tomcat leaves it out entirely, and HTTP/2 doesn't have one.
+
+<Takeaway>
+Clients act on the first digit; the reason phrase is decoration.
+</Takeaway>
+
+<span id="concept-a1-8"></span>
+
+### <span class="concept-badge">A1.8</span> 400 vs 422
+
+400 Bad Request: the server can't even parse the request, such as broken JSON. 422 Unprocessable Content: it parsed fine but breaks the rules, like a quantity of 0, a missing customer or a quantity sent as `"two"`. RFC 9110 made 422 part of core HTTP in 2022 (it used to be WebDAV-only), and its name changed from “Unprocessable Entity”.
+
+Some APIs use 400 for everything; separating them tells the client whether to fix its JSON serializer or its data.
+
+<Takeaway>
+400 means it didn't parse; 422 means it parsed but breaks the rules.
+</Takeaway>
+
+<span id="concept-a1-9"></span>
+
+### <span class="concept-badge">A1.9</span> 401 vs 403 vs 404
+
+401 Unauthorized actually means *unauthenticated*: no valid credentials, and the response must carry `WWW-Authenticate` saying how to authenticate. 403 Forbidden: the server knows who you are, and the answer is still no. When even confirming that a resource exists would leak information (someone else's order), answer 404 instead.
+
+[Module A10](/apis/a10-security/) covers authentication and authorisation properly; for now, know which code means what.
+
+<Takeaway>
+401 is “who are you?”, 403 is “no”, and 404 is “no, and I won't say it exists”.
+</Takeaway>
+
+<span id="concept-a1-10"></span>
+
+### <span class="concept-badge">A1.10</span> 404 vs 405 vs 410
+
+404: nothing at this URL. 405 Method Not Allowed: the resource exists but not for this method, and the response **must** include `Allow` listing what does work. 410 Gone: it existed and was removed on purpose, so clients may forget the URL; rarely worth the bookkeeping.
+
+<Takeaway>
+A 405 without an Allow header is incomplete.
+</Takeaway>
+
+<span id="concept-a1-11"></span>
+
+### <span class="concept-badge">A1.11</span> 406 vs 415
+
+Both are about formats, in opposite directions. 406 Not Acceptable: the client's `Accept` header rules out every format you can *produce*. 415 Unsupported Media Type: the request's `Content-Type` is a format you can't *consume*. Many APIs ignore `Accept` and always send JSON. That's common, but being strict catches client bugs early.
+
+<Takeaway>
+406 is about what you produce (Accept); 415 is about what you consume (Content-Type).
+</Takeaway>
+
+<span id="concept-a1-12"></span>
+
+### <span class="concept-badge">A1.12</span> 409 vs 412 vs 422
+
+422: the request is invalid on its own. 409 Conflict: the request is valid but clashes with the resource's *current state*, such as editing an order that's already cancelled. 412 Precondition Failed: the client made the request conditional (“only if it's still version 7”, with `If-Match`) and the condition is false.
+
+That's the cure for lost updates in module A4.
+
+<Takeaway>
+Invalid on its own is 422; wrong for the current state is 409; a failed If-Match is 412.
+</Takeaway>
+
+<span id="concept-a1-13"></span>
+
+### <span class="concept-badge">A1.13</span> Choosing the 2xx
+
+Every success code tells the client something different:
+
+| Code | Meaning | What comes with it |
+|---|---|---|
+| 200 OK | Here's the result | The result in the body |
+| 201 Created | A new resource exists | `Location` with its URL, usually the resource in the body |
+| 202 Accepted | Received; you'll do it later | Somewhere to check progress (module A7) |
+| 204 No Content | Done, nothing to say | No body at all |
+
+<Takeaway>
+Pick the 2xx that tells the client what happened: 200, 201, 202 or 204.
+</Takeaway>
+
+<span id="concept-a1-14"></span>
+
+### <span class="concept-badge">A1.14</span> 5xx means “not your fault”
+
+500 is what happens when your code throws; never send it on purpose for a client mistake, because clients and load balancers treat 5xx as a reason to retry or fail over. 503 Service Unavailable: overloaded or in maintenance, ideally with `Retry-After`. 502 and 504 come from a proxy in front of you ([3.4](/part-3-http11/#concept-3-4)).
+
+<Takeaway>
+5xx means the same request may work later, so never use it for a client's mistake.
+</Takeaway>
+
+<span id="concept-a1-15"></span>
+
+### <span class="concept-badge">A1.15</span> The headers an API must get right
+
+Several status codes are incomplete without a header:
+
+| Header | Send it with | Why |
+|---|---|---|
+| `Content-Type` | Every body | Says what format the body is in |
+| `Location` | 201 | Where the new resource lives |
+| `Allow` | 405 | Which methods do work |
+| `Accept-Patch` | 415 on a PATCH | Which patch formats you take |
+| `Retry-After` | 429 and 503 | When to try again |
+| `WWW-Authenticate` | 401 | How to authenticate |
+
+Later modules add `ETag` and `If-Match` (A4), `Idempotency-Key` (A3), `Cache-Control` (A4) and request ids (A9).
+
+<Takeaway>
+Each status code has a header that completes it: Location, Allow, Retry-After, WWW-Authenticate.
+</Takeaway>
+
+<span id="concept-a1-16"></span>
+
+### <span class="concept-badge">A1.16</span> Make state changes safe to repeat
+
+A client whose “cancel” request timed out doesn't know whether it worked, so it sends it again. If the second cancel returns 409 (“already cancelled”), the client sees an error for something that succeeded.
+
+Treat a request that would leave the resource exactly as it is as a no-op success (200). Reserve 409 for changes that would *actually* change a resource that can't change. This is the same idea A3 generalises to POST.
+
+<Takeaway>
+A request that would change nothing should succeed, not fail, so retries are safe.
+</Takeaway>
 
 ## Which status code?
 
@@ -51,7 +241,9 @@ The order is a sensible default, not a rule. Real frameworks check some things i
 
 Extend the A0 API. Add PUT, PATCH and DELETE, and make every response code deliberate. The client may set `customer`, `currency`, `items` and `status` (only `pending` or `cancelled`). A cancelled order is final.
 
-**Spec.** Each row is one test. Both reference implementations pass all of them.
+#### Spec
+
+Each row is one test. Both reference implementations pass all of them.
 
 | # | Request | Must return |
 |---|---|---|
@@ -75,7 +267,9 @@ Extend the A0 API. Add PUT, PATCH and DELETE, and make every response code delib
 
 Error bodies stay simple in this module: `{"error": "...", "fields": {...}}`. Module A2 replaces them with the RFC 9457 standard format.
 
-**Mapping errors to codes in one place.** Handlers throw; one handler turns failures into responses. The interesting part is telling 400 from 422.
+#### Mapping errors to codes in one place
+
+Handlers throw; one handler turns failures into responses. The interesting part is telling 400 from 422.
 
 <Tabs syncKey="lab-lang">
 <TabItem label="Java (Spring Boot)">
@@ -120,7 +314,6 @@ async def validation_handler(_: Request, e: RequestValidationError) -> JSONRespo
     fields = {".".join(str(x) for x in err["loc"][1:]) or "body": err["msg"] for err in errors}
     return JSONResponse({"error": "request body has the wrong shape", "fields": fields}, status_code=422)
 
-
 app.add_exception_handler(RequestValidationError, validation_handler)
 ```
 
@@ -129,7 +322,7 @@ FastAPI's default is 422 for both cases, so broken JSON needs this remapping to 
 </TabItem>
 </Tabs>
 
-**PUT, PATCH and the safe-to-repeat rule (A1.16)**
+#### PUT, PATCH and the safe-to-repeat rule (A1.16)
 
 <Tabs syncKey="lab-lang">
 <TabItem label="Java (Spring Boot)">
@@ -180,7 +373,6 @@ def replace_order(order_id: str, body: OrderInput):
         raise ApiError(422, "validation failed", problems)
     return apply(current, body)
 
-
 @app.patch("/orders/{order_id}", response_model=Order)
 async def patch_order(order_id: str, request: Request):
     require_content_type(request, "application/merge-patch+json", header="Accept-Patch")   # else 415
@@ -191,7 +383,6 @@ async def patch_order(order_id: str, request: Request):
     nxt = OrderInput.model_validate(merged)
     # ...validate nxt (422), then:
     return apply(current, nxt)
-
 
 def apply(current: Order, nxt: OrderInput) -> Order:
     """A cancelled order is final, but repeating the same change is a no-op 200."""
@@ -222,7 +413,7 @@ Building the same spec in both frameworks shows how much HTTP behaviour comes fr
 | Reason phrase | Omitted (`HTTP/1.1 201`) | Sent (`HTTP/1.1 201 Created`) |
 | Header name case | `Location`, `Allow` | `location`, `allow` (header names are case-insensitive, so both are correct) |
 
-**Try it with curl**
+#### Try it with curl
 
 ```bash
 curl -i -X DELETE localhost:8080/orders                       # 405 + Allow
@@ -236,4 +427,11 @@ curl -i -X PATCH localhost:8080/orders/ord_1 \
 
 ## You've got it when
 
-Given any request against the orders API, you can name the status code and the headers it must carry, and explain why that code and not its neighbours: 400 vs 422, 401 vs 403, 404 vs 405, 406 vs 415, 409 vs 412. You can also say which methods are safe and idempotent, and why a timed-out cancel shouldn't come back as 409.
+<Checkpoint>
+
+- Name the status code and required headers for any request against the orders API.
+- Explain why that code and not its neighbours: 400 vs 422, 401 vs 403, 404 vs 405, 406 vs 415, 409 vs 412.
+- Say which methods are safe and which are idempotent.
+- Explain why a timed-out cancel shouldn't come back as 409.
+
+</Checkpoint>

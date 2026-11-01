@@ -1,25 +1,129 @@
 ---
 title: "A6 — Evolving an API"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import BreakingChanges from '../../../components/diagrams/BreakingChanges.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
 
 An API ships once and changes for years. Its clients are other teams' code, mobile apps that users never update, and scripts someone wrote in 2021. You can't change them, so you change the API in ways they survive, and when you truly can't, you run two versions side by side and give everyone time to move. This module covers how to tell the two cases apart and what to do in each.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-a6-1" class="concept-num" href="#concept-a6-1">A6.1</a> What counts as breaking.** A change is breaking if a client that worked yesterday can fail today without changing anything. Breaking: removing or renaming a field, endpoint or parameter; changing a type or format; making optional input required; tightening validation or limits; changing status codes or error types; changing the meaning of a value. Usually safe: adding endpoints, adding optional request fields or parameters, adding response fields.
-- **<a id="concept-a6-2" class="concept-num" href="#concept-a6-2">A6.2</a> The tolerant reader.** Additive changes are only safe if clients ignore what they don't recognise. Build clients that ignore unknown fields, don't depend on field order, and handle unknown enum values with a sensible default. Both lab frameworks ignore unknown JSON fields by default, which is what makes “add a field” a non-event. Strict deserialisers that fail on unknown fields turn every additive change into a breaking one.
-- **<a id="concept-a6-3" class="concept-num" href="#concept-a6-3">A6.3</a> Hyrum's law.** Hyrum Wright's observation: with enough users, every observable behaviour of your API will be depended on by somebody, whatever the contract says. Field order, error message text, timing, the order of a list you never promised to sort. Contracts limit what you *owe* clients, not what they rely on. When a “safe” change breaks someone, this is usually why.
-- **<a id="concept-a6-4" class="concept-num" href="#concept-a6-4">A6.4</a> Evolve first, version last.** Most changes can be made compatible. Add the new field next to the old one instead of renaming. Accept both old and new input formats. Add a new endpoint rather than changing an old one. A new major version is for changes that can't be made compatible, and every live version is code you maintain, test and secure.
-- **<a id="concept-a6-5" class="concept-num" href="#concept-a6-5">A6.5</a> Where the version goes.** **In the path** (`/v2/orders`): visible, easy to route at a gateway and easy to test with curl; the most common choice. **In a header or media type** (`Accept: application/vnd.example.v2+json`): URLs stay stable and versions can apply per resource, but it's invisible in logs and harder to try out. **Dated versions** (Stripe's `Stripe-Version: 2024-06-20`): each account is pinned to the API as it was on a date, and the server translates between versions. Very smooth for clients, a lot of machinery on the server. Pick one, document it, and never mix them.
-- **<a id="concept-a6-6" class="concept-num" href="#concept-a6-6">A6.6</a> Separate storage from representation.** In the lab, both versions read and write the same stored orders; each has its own *representation*. v1 shows `customer` as an email string, v2 as an object. Keeping the storage model apart from the contract lets you run versions side by side without copying data, and lets storage change without touching any contract.
-- **<a id="concept-a6-7" class="concept-num" href="#concept-a6-7">A6.7</a> Deprecate in band.** Tell clients in every response, in standard headers they can monitor: `Deprecation` (RFC 9745) says since when, `Sunset` (RFC 8594) says when it stops working, and `Link` with `rel="deprecation"` and `rel="successor-version"` says where to read more and what replaces it. Documentation and emails reach people; headers reach code. A client library can log a warning the first time it sees `Deprecation`.
-- **<a id="concept-a6-8" class="concept-num" href="#concept-a6-8">A6.8</a> Sunset with data.** Log which clients still call the old version (by API key or user agent), contact them, and watch the traffic fall before the date. Common tactics near the end are *brownouts*: short scheduled periods where v1 returns errors, so forgotten integrations surface while there's still time. After the sunset, answer 410 Gone with a problem body pointing at the migration guide, rather than a confusing 404.
-- **<a id="concept-a6-9" class="concept-num" href="#concept-a6-9">A6.9</a> Catch breaks before release.** Compare each change to the OpenAPI document (A2) against the last released one in CI. Tools like oasdiff list breaking changes automatically. Consumer-driven contract tests (such as Pact) go further: each consumer records the requests and fields it actually relies on, and the provider's build fails if a change would break any of them.
+<span id="concept-a6-1"></span>
+
+### <span class="concept-badge">A6.1</span> What counts as breaking
+
+A change is breaking if a client that worked yesterday can fail today without changing anything. Breaking: removing or renaming a field, endpoint or parameter; changing a type or format; making optional input required; tightening validation or limits; changing status codes or error types; changing the meaning of a value.
+
+Usually safe: adding endpoints, adding optional request fields or parameters, adding response fields.
+
+<Takeaway>
+If a client that worked yesterday can fail today without changing, the change is breaking.
+</Takeaway>
+
+<span id="concept-a6-2"></span>
+
+### <span class="concept-badge">A6.2</span> The tolerant reader
+
+Additive changes are only safe if clients ignore what they don't recognise. Build clients that ignore unknown fields, don't depend on field order, and handle unknown enum values with a sensible default.
+
+Both lab frameworks ignore unknown JSON fields by default, which is what makes “add a field” a non-event. Strict deserialisers that fail on unknown fields turn every additive change into a breaking one.
+
+<Takeaway>
+Clients must ignore what they don't recognise, or every addition breaks them.
+</Takeaway>
+
+<span id="concept-a6-3"></span>
+
+### <span class="concept-badge">A6.3</span> Hyrum's law
+
+Hyrum Wright's observation: with enough users, every observable behaviour of your API will be depended on by somebody, whatever the contract says. Field order, error message text, timing, the order of a list you never promised to sort.
+
+Contracts limit what you *owe* clients, not what they rely on. When a “safe” change breaks someone, this is usually why.
+
+<Takeaway>
+Every observable behaviour will be depended on, whatever the contract says.
+</Takeaway>
+
+<span id="concept-a6-4"></span>
+
+### <span class="concept-badge">A6.4</span> Evolve first, version last
+
+Most changes can be made compatible. Add the new field next to the old one instead of renaming.
+
+Accept both old and new input formats. Add a new endpoint rather than changing an old one. A new major version is for changes that can't be made compatible, and every live version is code you maintain, test and secure.
+
+<Takeaway>
+Make changes compatible whenever you can; a new version is the last resort.
+</Takeaway>
+
+<span id="concept-a6-5"></span>
+
+### <span class="concept-badge">A6.5</span> Where the version goes
+
+There are three common places to put the version:
+
+| Where | Example | For | Against |
+|---|---|---|---|
+| Path | `/v2/orders` | Visible, easy to route at a gateway, easy to test with curl. The most common choice | Every URL changes with the version |
+| Header or media type | `Accept: application/vnd.example.v2+json` | URLs stay stable; versions can apply per resource | Invisible in logs, harder to try out |
+| Date | `Stripe-Version: 2024-06-20` | Each account is pinned to the API as it was on a date; very smooth for clients | The server translates between versions: a lot of machinery |
+
+Pick one, document it, and never mix them.
+
+<Takeaway>
+Path, header or dated versioning all work: pick one and never mix them.
+</Takeaway>
+
+<span id="concept-a6-6"></span>
+
+### <span class="concept-badge">A6.6</span> Separate storage from representation
+
+In the lab, both versions read and write the same stored orders; each has its own *representation*. v1 shows `customer` as an email string, v2 as an object. Keeping the storage model apart from the contract lets you run versions side by side without copying data, and lets storage change without touching any contract.
+
+<Takeaway>
+Keep the storage model apart from the contract, so versions can share data.
+</Takeaway>
+
+<span id="concept-a6-7"></span>
+
+### <span class="concept-badge">A6.7</span> Deprecate in band
+
+Tell clients in every response, in standard headers they can monitor: `Deprecation` (RFC 9745) says since when, `Sunset` (RFC 8594) says when it stops working, and `Link` with `rel="deprecation"` and `rel="successor-version"` says where to read more and what replaces it. Documentation and emails reach people; headers reach code.
+
+A client library can log a warning the first time it sees `Deprecation`.
+
+<Takeaway>
+Announce deprecation in standard headers that client code can see.
+</Takeaway>
+
+<span id="concept-a6-8"></span>
+
+### <span class="concept-badge">A6.8</span> Sunset with data
+
+Log which clients still call the old version (by API key or user agent), contact them, and watch the traffic fall before the date. Common tactics near the end are *brownouts*: short scheduled periods where v1 returns errors, so forgotten integrations surface while there's still time.
+
+After the sunset, answer 410 Gone with a problem body pointing at the migration guide, rather than a confusing 404.
+
+<Takeaway>
+Watch who still calls the old version, and retire it with data, not hope.
+</Takeaway>
+
+<span id="concept-a6-9"></span>
+
+### <span class="concept-badge">A6.9</span> Catch breaks before release
+
+Compare each change to the OpenAPI document (A2) against the last released one in CI. Tools like oasdiff list breaking changes automatically.
+
+Consumer-driven contract tests (such as Pact) go further: each consumer records the requests and fields it actually relies on, and the provider's build fails if a change would break any of them.
+
+<Takeaway>
+Diff the contract in CI, so breaking changes are caught before release.
+</Takeaway>
 
 ## Breaking or safe?
 
@@ -29,7 +133,7 @@ An API ships once and changes for years. Its clients are other teams' code, mobi
 
 v1 has `customer` as an email string. v2 makes it an object, `{"email", "name"}`: a type change, so a new version. Both gained an optional `note` after launch, an additive change that needed no new version. Storage is in memory: this module is about the contract.
 
-**Spec**
+#### Spec
 
 | # | Request | Must return |
 |---|---|---|
@@ -89,11 +193,9 @@ Two routers, one store, and a middleware for the headers:
 v1 = APIRouter(prefix="/v1/orders")
 v2 = APIRouter(prefix="/v2/orders")
 
-
 def v2_view(o: Stored) -> OrderV2:
     return OrderV2(id=o.id, customer=Customer(email=o.customer_email, name=o.customer_name), currency=o.currency,
                    items=o.items, note=o.note, total=o.total, status=o.status, created_at=o.created_at)
-
 
 @app.middleware("http")
 async def deprecation_headers(request: Request, call_next):
@@ -111,7 +213,7 @@ async def deprecation_headers(request: Request, call_next):
 </TabItem>
 </Tabs>
 
-**Try it**
+#### Try it
 
 ```bash
 curl -si localhost:8080/v1/orders/ord_1 | grep -iE '^(deprecation|sunset|link)'
@@ -119,4 +221,10 @@ curl -si localhost:8080/v1/orders/ord_1 | grep -iE '^(deprecation|sunset|link)'
 
 ## You've got it when
 
-Given a proposed change, you can say whether it breaks clients and how to make it compatible if it does; you can argue for path, header or dated versioning for a given audience; and you can plan a deprecation from first header to final 410, including how you'd know who is still on the old version.
+<Checkpoint>
+
+- Say whether a proposed change breaks clients, and how to make it compatible if it does.
+- Argue for path, header or dated versioning for a given audience.
+- Plan a deprecation from the first header to the final 410, including how you'd know who is still on the old version.
+
+</Checkpoint>

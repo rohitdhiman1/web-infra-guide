@@ -14,6 +14,8 @@ export default defineConfig({
       description:
         'A concept map and hands-on course on web servers, HTTP, HTTPS/TLS and nginx.',
       customCss: ['./src/styles/custom.css'],
+      // Code blocks get the same rounded corners as tables and callouts.
+      expressiveCode: { styleOverrides: { borderRadius: '0.5rem' } },
       lastUpdated: false,
       pagination: true,
       sidebar: [
@@ -75,7 +77,8 @@ export default defineConfig({
             page('A7 — Long-running work and webhooks', 'apis/a7-async-webhooks'),
             page('A8 — API styles', 'apis/a8-api-styles'),
             page('A9 — The gateway and the edge', 'apis/a9-gateway-edge'),
-            page('A10 — Capstone', 'apis/a10-capstone'),
+            page('A10 — Securing an API', 'apis/a10-security'),
+            page('A11 — Capstone', 'apis/a11-capstone'),
           ],
         },
         {

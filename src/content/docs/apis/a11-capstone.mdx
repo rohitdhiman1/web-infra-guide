@@ -1,10 +1,14 @@
 ---
-title: "A10 — Capstone: design it, build it, break it"
+title: "A11 — Capstone: design it, build it, break it"
 tableOfContents:
-  maxHeadingLevel: 2
+  maxHeadingLevel: 3
 ---
 
 import CapstonePipeline from '../../../components/diagrams/CapstonePipeline.tsx';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+
+{/* format: no-concepts — the capstone is organised in phases, not concepts. */}
 
 Every module so far built one idea in isolation. The capstone puts them in one service, the orders and payments API, then asks you to break it on purpose and explain what happened. That last part is what interviews test: not “do you know what 412 means” but “walk me through what happens when two clients pay for the same order while the gateway is slow”.
 
@@ -86,8 +90,15 @@ Write one page, then say it out loud, as if an interviewer asked “walk me thro
 4. How concurrent edits are handled, and why optimistic locking instead of locks.
 5. How pagination stays correct under writes, and what it doesn't guarantee.
 6. The limits, where they're enforced, and what changes with more than one instance.
-7. What you'd change for production: auth, a shared rate-limit store, key expiry, an outbox for events, observability.
+7. What you'd change for production: authentication and authorisation ([A10](/apis/a10-security/)), a shared rate-limit store, key expiry, an outbox for events, observability.
 
 ## You've got it when
 
-You can run every drill above, predict its outcome beforehand, and explain the result from first principles; the conformance suite passes against your own implementation; and you can talk through the design for half an hour, following the interviewer's “why?” three questions deep, without notes.
+<Checkpoint>
+
+- Run every drill above, and predict its outcome before you do.
+- Explain each result from first principles.
+- Pass the conformance suite with your own implementation.
+- Talk through the design for half an hour, following the interviewer's “why?” three questions deep.
+
+</Checkpoint>

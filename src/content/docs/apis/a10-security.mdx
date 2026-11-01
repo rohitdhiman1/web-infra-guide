@@ -1,0 +1,287 @@
+---
+title: "A10 — Securing an API"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+import AuthMatrix from '../../../components/diagrams/AuthMatrix.tsx';
+
+Everything so far assumed a friendly caller. A real API has to answer two questions on every request: *who is this?* and *are they allowed to do this?* This module covers how APIs answer both, what can go wrong, and the vocabulary interviewers expect. OAuth 2.0, OIDC and SAML get their own deep dive later; here you learn where they fit.
+
+## Authentication and authorisation
+
+:::note[Definition]
+**Authentication** (often “authn”) establishes **who** is calling: the caller proves an identity, usually by presenting a credential the server can check.
+
+**Authorisation** (often “authz”) decides **what** that identity may do: which actions, on which resources. It always comes after authentication, and happens on every request.
+:::
+
+| | Authentication | Authorisation |
+|---|---|---|
+| Question | Who are you? | Are you allowed to do this? |
+| Based on | A credential: API key, token, certificate | Rules: roles, scopes, ownership |
+| Fails with | `401 Unauthorized` (despite the name) | `403 Forbidden`, or `404 Not Found` to hide a resource |
+| Example | Alice's token is valid and unexpired | Alice may read *her* order, not Bob's |
+
+## Concepts
+
+<span id="concept-a10-1"></span>
+
+### <span class="concept-badge">A10.1</span> Two checks, in order
+
+Every protected request goes through the same layers. First **authentication**: is there a credential, and is it valid? Then **authorisation**, which itself has two levels. *Function-level*: may this kind of caller do this kind of action at all, for example refunds? *Object-level*: may this caller touch *this particular* order?
+
+Most real breaches aren't broken passwords or cryptography. They're a missing authorisation check on one endpoint.
+
+<Takeaway>
+Authenticate once, then authorise every action and every object, on every request.
+</Takeaway>
+
+<span id="concept-a10-2"></span>
+
+### <span class="concept-badge">A10.2</span> How callers prove who they are
+
+| Credential | Typical caller | How it's sent | Watch out for |
+|---|---|---|---|
+| API key | A server or script belonging to a customer | `Authorization: Bearer sk_live_…` or a header like `X-API-Key` | Long-lived; identifies an *application*, not a person |
+| Bearer token (often a JWT) | Apps acting for a user, or services | `Authorization: Bearer eyJ…` | Anyone holding it can use it, so keep it short-lived |
+| Session cookie | A browser on your own website | `Cookie: session=…` | Needs CSRF protection, because browsers send cookies automatically |
+| Client certificate (mTLS) | Service-to-service inside a company | During the TLS handshake ([5.15](/part-5-tls/#concept-5-15)) | Certificate issuing and rotation take real infrastructure |
+
+Credentials go in **headers**, never in the URL. URLs end up in access logs, browser history, proxy logs and `Referer` headers.
+
+<Takeaway>
+Pick the credential for the caller (scripts, users, browsers or services), and always send it in a header.
+</Takeaway>
+
+<span id="concept-a10-3"></span>
+
+### <span class="concept-badge">A10.3</span> 401, 403 and 404, done properly
+
+**401 Unauthorized** means *not authenticated*: no credential, or one that's invalid or expired. It must carry `WWW-Authenticate` saying how to authenticate. For bearer tokens (RFC 6750) that's `WWW-Authenticate: Bearer`, plus `error="invalid_token"` when a token was sent but is bad, so the client knows to fetch a new one.
+
+**403 Forbidden** means authenticated but not allowed: the caller is known, and the answer is no. Use **404** instead when even admitting the resource exists would leak information, for example Bob asking for Alice's order. (A1.9 introduced the codes; this is when to use each.)
+
+<Takeaway>
+401 asks the caller to authenticate (with WWW-Authenticate), 403 refuses a known caller, and 404 hides what they mustn't see.
+</Takeaway>
+
+<span id="concept-a10-4"></span>
+
+### <span class="concept-badge">A10.4</span> API keys
+
+An API key is a long random secret that identifies a client application. Generate at least 128 bits of randomness. Give it a recognisable prefix such as `sk_live_`, so secret scanners can spot leaked keys in code.
+
+Show the key to the customer **once**, and store only a **hash** of it. Like a password, a leaked database then doesn't leak usable keys. Because the key is long and random, a plain SHA-256 is enough; slow password hashes aren't needed.
+
+Let customers hold several keys, so they can rotate one without downtime. Attach scopes and rate limits to each key (A9).
+
+<Takeaway>
+Generate API keys with high entropy and a prefix, show them once, store them hashed, and make rotation easy.
+</Takeaway>
+
+<span id="concept-a10-5"></span>
+
+### <span class="concept-badge">A10.5</span> Bearer tokens and JWTs
+
+A *bearer* token works for whoever holds it, like cash. Many APIs use **JWTs** (JSON Web Tokens): three base64url parts separated by dots, a header, a payload of *claims*, and a signature.
+
+| Part | Example | Meaning |
+|---|---|---|
+| Header | `{"alg": "RS256", "kid": "2026-10"}` | How it's signed, and with which key |
+| Payload | `{"sub": "alice", "iss": "https://auth.example.com", "aud": "orders-api", "exp": 1793491200, "scope": "orders:read orders:write"}` | Who it's about, who issued it, who it's for, when it expires, what it allows |
+| Signature | `MEUCIQ…` | Proves the issuer created exactly this header and payload |
+
+A JWT is **signed, not encrypted**: anyone can decode the payload, so never put secrets in it. Before trusting one, verify:
+- the **signature**, with the algorithm *you* expect (never `alg: none`, and never let the token choose);
+- `exp` and `nbf`, so it isn't expired or not yet valid;
+- `iss`, so it comes from your identity provider;
+- `aud`, so it's meant for *this* API.
+
+A JWT can't easily be revoked before it expires, so keep access tokens short-lived (minutes) and use refresh tokens to get new ones. The alternative is *opaque* tokens that the API checks with the issuer on every request (token introspection): easier to revoke, at the cost of an extra call.
+
+<Takeaway>
+A JWT is signed, not secret: verify the signature, expiry, issuer and audience, and keep it short-lived.
+</Takeaway>
+
+<span id="concept-a10-6"></span>
+
+### <span class="concept-badge">A10.6</span> Where OAuth 2.0, OpenID Connect and SAML fit
+
+**OAuth 2.0** is about *delegated authorisation*: how an application gets an access token to call an API, either for a user or for itself. The two flows to know are *authorization code with PKCE* (an app acting for a signed-in user) and *client credentials* (a service acting for itself). OAuth on its own doesn't tell the app who the user is.
+
+**OpenID Connect (OIDC)** adds that: an *ID token* (a JWT) describing the signed-in user, on top of OAuth 2.0. It's what “Sign in with Google” uses.
+
+**SAML** is the older, XML-based way enterprises do single sign-on between an identity provider (such as Okta or Azure AD) and applications. The later deep dive covers all three end to end.
+
+<Takeaway>
+OAuth 2.0 issues access tokens, OIDC adds who the user is, and SAML is enterprise single sign-on.
+</Takeaway>
+
+<span id="concept-a10-7"></span>
+
+### <span class="concept-badge">A10.7</span> Authorisation models
+
+| Model | The rule looks like | Example |
+|---|---|---|
+| Role-based (RBAC) | Roles grant permissions | Support agents may read any order |
+| Scopes | The token lists what it may do | `refunds:write` is needed to refund |
+| Attribute-based (ABAC) | Rules over attributes of the caller and the resource | Customers may change an order only if they own it and it's still pending |
+
+Real APIs combine them. Whatever the model, the rules run **on the server, on every request**. Deny by default: an action that no rule allows is forbidden. Hiding a button in the UI is not authorisation.
+
+<Takeaway>
+Combine roles, scopes and ownership rules, enforce them on the server, and deny by default.
+</Takeaway>
+
+<span id="concept-a10-8"></span>
+
+### <span class="concept-badge">A10.8</span> Object-level authorisation (BOLA)
+
+The most common serious API flaw: the endpoint checks that you're logged in, but not that the object is yours. Bob changes `ord_7` to `ord_1` in the URL and reads Alice's order. OWASP ranks **broken object-level authorisation** as the #1 API risk.
+
+Check ownership on **every** access to an object, in the query itself where you can: `SELECT … WHERE id = ? AND customer_id = ?`. Opaque, hard-to-guess ids help a little, but they aren't a defence: ids leak through logs, emails and shared links. Answer a failed ownership check with 404, so callers can't probe which ids exist.
+
+<Takeaway>
+Check that the caller may touch this specific object on every request; unguessable ids are not a substitute.
+</Takeaway>
+
+<span id="concept-a10-9"></span>
+
+### <span class="concept-badge">A10.9</span> Function-level and property-level authorisation
+
+**Function-level:** admin and support endpoints need their own checks. `GET /admin/orders` must not work just because someone guessed the path (OWASP's *broken function-level authorisation*).
+
+**Property-level:** a caller may be allowed to touch an object but not every field of it. On input, ignore or reject fields the client doesn't own, such as `total` or `status: "paid"`. That's *mass assignment*, and the field-ownership rule from A0.9 is the defence. On output, don't return fields the caller shouldn't see, such as another customer's email in a list.
+
+<Takeaway>
+Authorise actions and fields as well as objects: guard admin endpoints, and only accept and return the fields this caller may use.
+</Takeaway>
+
+<span id="concept-a10-10"></span>
+
+### <span class="concept-badge">A10.10</span> Transport and secrets
+
+Serve the API over **HTTPS only**, and send HSTS ([5.13](/part-5-tls/#concept-5-13)) from any domain browsers use, so credentials never cross the network in clear text. Behind the gateway, use mTLS between services if the network isn't trusted (A9.8).
+
+Keep secrets out of the repository: signing keys, database passwords and API keys belong in a secret store or the deployment environment. Never log `Authorization` headers or tokens. Plan for rotation before you need it: support two signing keys at once (the `kid` header picks one), and rotate API keys without downtime.
+
+<Takeaway>
+Encrypt every hop, keep secrets out of code and logs, and design rotation in from the start.
+</Takeaway>
+
+<span id="concept-a10-11"></span>
+
+### <span class="concept-badge">A10.11</span> The OWASP API Security Top 10
+
+OWASP's list of the most common API security risks (2023 edition) makes a good checklist. Most entries map to something in this track:
+
+| Risk | What goes wrong | Where this track covers it |
+|---|---|---|
+| API1 Broken object-level authorisation | Reading or changing someone else's object | A10.8 |
+| API2 Broken authentication | Weak, leaked or unchecked credentials and tokens | A10.2–A10.5 |
+| API3 Broken object property-level authorisation | Mass assignment; exposing fields | A10.9, A0.9 |
+| API4 Unrestricted resource consumption | No limits on requests, page sizes or payloads | A9, A5.1 |
+| API5 Broken function-level authorisation | Admin endpoints open to everyone | A10.9 |
+| API6 Unrestricted access to sensitive business flows | Bots abusing checkout, sign-up or coupons | Rate limits (A9) plus business rules |
+| API7 Server-side request forgery | Your server fetches a URL an attacker chose | A7.9 |
+| API8 Security misconfiguration | Open CORS, verbose errors, missing TLS | A9.7, A2.6, A10.10 |
+| API9 Improper inventory management | Forgotten old versions and test hosts | A6.8 |
+| API10 Unsafe consumption of APIs | Trusting third-party APIs blindly | Validate their responses; timeouts (A3.2) |
+
+<Takeaway>
+Use the OWASP API Top 10 as a review checklist for every API you design.
+</Takeaway>
+
+## Who may do what?
+
+Pick a caller and an action. Watch which layer answers: authentication (401), function-level authorisation (403) or object-level authorisation (404). The order `ord_1` belongs to Alice.
+
+<AuthMatrix client:visible />
+
+## What it looks like on the wire
+
+This module has no reference lab yet; these are the exchanges an implementation must produce.
+
+#### No credential
+
+```http
+GET /orders/ord_1 HTTP/1.1
+
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer
+Content-Type: application/problem+json
+
+{"type": "https://api.example.com/problems/unauthenticated", "title": "Authentication required", "status": 401}
+```
+
+#### An expired token
+
+```http
+GET /orders/ord_1 HTTP/1.1
+Authorization: Bearer eyJhbGciOiJSUzI1NiIs…
+
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer error="invalid_token", error_description="The access token expired"
+```
+
+#### Bob asks for Alice's order
+
+```http
+GET /orders/ord_1 HTTP/1.1
+Authorization: Bearer <a valid token for Bob>
+
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{"type": "https://api.example.com/problems/order-not-found", "title": "Order not found", "status": 404}
+```
+
+#### The ownership check in code
+
+The check belongs in the query, so a forgotten `if` can't skip it.
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+public Order get(String id, Caller caller) {
+  return db.sql("SELECT * FROM orders WHERE id = ? AND customer_id = ?")
+      .params(Ids.order(id), caller.customerId())
+      .query(this::row).optional()
+      // Not found and not yours look identical to the caller.
+      .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "order-not-found", "order " + id + " not found"));
+}
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+def get_order(order_id: str, caller: Caller = Depends(current_caller)) -> Order:
+    row = db.execute("SELECT * FROM orders WHERE id = %s AND customer_id = %s",
+                     (parse_id(order_id), caller.customer_id)).fetchone()
+    if row is None:  # not found and not yours look identical to the caller
+        raise ApiError(404, "order-not-found", f"order {order_id} not found")
+    return to_order(row)
+```
+
+</TabItem>
+</Tabs>
+
+## You've got it when
+
+<Checkpoint>
+
+- Explain the difference between authentication and authorisation, with an example of each failing.
+- Choose a credential type for a given caller, and say where it travels and why.
+- Return the right code (401, 403 or 404) with the right headers for any failed access.
+- Say what to verify in a JWT before trusting it, and why it must be short-lived.
+- Place OAuth 2.0, OpenID Connect and SAML in one sentence each.
+- Find a broken object-level authorisation bug in an endpoint, and fix it.
+- Walk through the OWASP API Top 10 and name the defence for each risk.
+
+</Checkpoint>

@@ -1,0 +1,112 @@
+---
+title: "{{TITLE}}"
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+{/*
+  Template for a module page. The reference example is /apis/a0-foundations/.
+  The rules are in docs/STYLE.md. After editing, run:  npm run build && npm run check-links && npm run check-format
+  Delete every comment like this one before you publish.
+*/}
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Takeaway from '../../../components/content/Takeaway.astro';
+import Checkpoint from '../../../components/content/Checkpoint.astro';
+
+One to three sentences that set the scene: what problem this module solves and why it matters. This first paragraph is rendered as the lead.
+
+## What {{SUBJECT}} is
+
+{/* Optional. Keep this section when the module introduces a term that needs a precise definition. */}
+
+:::note[Definition]
+A **term** is … (one or two sentences, precise enough to quote in an interview).
+:::
+
+## Concepts
+
+<span id="concept-{{code}}-1"></span>
+
+### <span class="concept-badge">{{CODE}}.1</span> First concept title
+
+One short paragraph that states the idea.
+
+A second short paragraph with the why, or the consequence. Link back to the main guide where it helps, for example [3.2](/part-3-http11/#concept-3-2).
+
+| Column | Column |
+|---|---|
+| Use a table | whenever you're comparing or listing things |
+
+<Takeaway>
+One sentence the reader should remember.
+</Takeaway>
+
+<span id="concept-{{code}}-2"></span>
+
+### <span class="concept-badge">{{CODE}}.2</span> Second concept title
+
+For “do this, not that”, use an Avoid / Prefer table rather than code side by side (side-by-side code overflows on phones):
+
+| ✗ Avoid | ✓ Prefer |
+|---|---|
+| `the wrong way` | `the right way` |
+
+<Takeaway>
+One sentence the reader should remember.
+</Takeaway>
+
+## A diagram or simulation title
+
+One or two sentences telling the reader what to try in the diagram.
+
+{/* import Thing from '../../../components/diagrams/Thing.tsx';  then:  <Thing client:visible /> */}
+
+## Lab {{CODE}} — what the reader builds
+
+One paragraph: what to build, and what storage it uses.
+
+#### Spec
+
+| # | Request | Must return |
+|---|---|---|
+| 1 | `METHOD /path` | `200` and what else |
+
+#### The key code
+
+<Tabs syncKey="lab-lang">
+<TabItem label="Java (Spring Boot)">
+
+```java
+// the few lines that matter, not a whole project
+```
+
+</TabItem>
+<TabItem label="Python (FastAPI)">
+
+```python
+# the same lines in Python
+```
+
+</TabItem>
+</Tabs>
+
+#### Try it with curl
+
+```bash
+curl -i localhost:8080/path
+```
+
+#### Things to notice
+
+- One observation per bullet.
+
+## You've got it when
+
+<Checkpoint>
+
+- Explain …
+- Choose between … and defend the choice.
+- Design … from scratch.
+
+</Checkpoint>
