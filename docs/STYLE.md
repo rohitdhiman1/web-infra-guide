@@ -79,6 +79,23 @@ tableOfContents:
 ---
 ```
 
+## Guide pages (Parts 1–15, field guide, toolkit…)
+
+The guide pages are generated from `source/guide.md` by `npm run split-guide`, and their wording must
+stay exactly as written. So they follow the same look through the generator (`formatPage()` in
+`scripts/split-guide.mjs`), with these differences:
+
+- **No Takeaways.** They would add text that isn't in the guide.
+- **Diagrams stay where the guide places them,** usually right after the lead, each under a `##`
+  heading taken from the diagram's title (`###` when the diagram sits inside one of the guide's own sections).
+- **Concepts** become `### <badge> Title` sections. The long concept text is split into short paragraphs
+  at sentence boundaries, with no words changed.
+- **Labels:** “Concepts”, “In the sandbox” and “You've got it when” become `##` sections. Other
+  standalone bold labels become `##` sections, or `###` inside one of the guide's own sections. The
+  self-check sentence goes in a `<Checkpoint title="">` box.
+
+To change how guide pages look, change the generator and re-run it. Never edit the generated `.mdx` files.
+
 ## Before a page is done
 
 1. `npm run build && npm run check-links && npm run check-format`: all green.
