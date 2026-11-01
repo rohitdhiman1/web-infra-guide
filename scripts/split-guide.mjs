@@ -75,11 +75,18 @@ const DIAGRAMS = [
 ];
 
 /**
- * Extra components that aren't in the guide, inserted after a page's opening paragraph.
- * They add material without touching the guide's wording.
+ * Extra components that aren't in the guide. They add material without touching its wording.
+ * `after: 'lead'` puts one after the opening paragraph, with a section heading;
+ * `after: '2.7'` puts one right after that concept, inside its section, with no extra heading.
  */
 const EXTRAS = {
-  'part-3-http11': ['HttpTimeline'],
+  'part-3-http11': [{ name: 'HttpTimeline', after: 'lead' }],
+  'part-2-linux': [
+    { name: 'FdTable', after: '2.2' },
+    { name: 'IoModels', after: '2.4' },
+    { name: 'ZeroCopy', after: '2.7' },
+    { name: 'EphemeralPorts', after: '2.8' },
+  ],
 };
 
 const pageHref = (slug) => (slug === 'index' ? '/' : `/${slug}/`);
@@ -333,6 +340,11 @@ function formatPage(body) {
     }
 
     // Diagrams near the top of a page get a section heading from their title.
+    // Extras placed inside a concept keep its section and get no heading of their own.
+    if (/^<[A-Za-z0-9]+ client:visible \/> \{\/\* inline \*\/\}$/.test(line)) {
+      out.push(line.replace(' {/* inline */}', ''));
+      continue;
+    }
     const d = /^<([A-Za-z0-9]+) client:visible \/>$/.exec(line);
     if (d && DIAGRAM_TITLES[d[1]]) {
       if (lastH2 === 'guide' || lastH2 === 'major') out.push(`### ${DIAGRAM_TITLES[d[1]]}`, '', line);
@@ -380,12 +392,21 @@ for (const f of readdirSync(OUT)) if (f.endsWith('.mdx') || f.endsWith('.md')) r
 const yaml = (s) => JSON.stringify(s);
 for (const s of pageSections) {
   const { imports, body: generated } = transformSection(s);
-  // Insert any extras after the opening paragraph (the first blank line).
+  // Insert any extras: after the opening paragraph, or right after a concept's line.
   let raw = generated;
-  for (const name of EXTRAS[s.page.slug] ?? []) {
+  for (const { name, after } of EXTRAS[s.page.slug] ?? []) {
     imports.push(`import ${name} from '../../components/diagrams/${name}';`);
-    const cut = raw.indexOf('\n\n');
-    raw = cut < 0 ? `${raw}\n\n<${name} client:visible />` : `${raw.slice(0, cut)}\n\n<${name} client:visible />${raw.slice(cut)}`;
+    const tag = `<${name} client:visible />`;
+    if (after === 'lead') {
+      const cut = raw.indexOf('\n\n');
+      raw = cut < 0 ? `${raw}\n\n${tag}` : `${raw.slice(0, cut)}\n\n${tag}${raw.slice(cut)}`;
+    } else {
+      const lines = raw.split('\n');
+      const i = lines.findIndex((l) => l.includes(`id="${conceptId(after)}"`));
+      if (i < 0) throw new Error(`EXTRAS: concept ${after} not found on ${s.page.slug}`);
+      lines.splice(i + 1, 0, '', `${tag} {/* inline */}`, '');
+      raw = lines.join('\n');
+    }
   }
   const { body, usesCheckpoint } = formatPage(raw);
   if (usesCheckpoint) imports.push("import Checkpoint from '../../components/content/Checkpoint.astro';");
