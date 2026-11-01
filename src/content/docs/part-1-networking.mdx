@@ -1,19 +1,28 @@
 ---
 title: "Part 1 — Networking foundations"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import LayerModel from '../../components/diagrams/LayerModel';
 import TcpLifecycle from '../../components/diagrams/TcpLifecycle';
 import DnsResolution from '../../components/diagrams/DnsResolution';
+import Checkpoint from '../../components/content/Checkpoint.astro';
 
 Every HTTP problem eventually becomes a network problem, so this layer pays back forever. Plan about one week.
+
+## The layer model
 
 <LayerModel client:visible />
 
 Keep this picture in mind for every part of the guide. When something breaks, the first question is always which envelope is damaged.
 
+## TCP connection lifecycle
+
 <TcpLifecycle client:visible />
 
 Press Next to step through it packet by packet. The states on each side are exactly what `ss -tan` prints, so you can match this picture to a live server. The side that closes first waits in TIME\_WAIT, which is why busy proxies can run short of ports ([1.5](#concept-1-5)).
+
+## DNS resolution
 
 <DnsResolution client:visible />
 
@@ -39,21 +48,75 @@ A DNS zone is a list of records: a name, a type, a TTL and a value. These are th
 
 **Try it:** `dig www.github.com` shows a CNAME chain ending in A records. `dig example.com CAA` and `dig example.com NS` show the others. Add `+short` for just the values.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-1-1" class="concept-num" href="#concept-1-1">1.1</a> The layer model.** Know which layer each thing lives at: IP (routing packets), TCP or UDP (transport), TLS (security), HTTP (application). Debugging means asking "which layer failed?"
-- **<a id="concept-1-2" class="concept-num" href="#concept-1-2">1.2</a> IP addresses and subnets.** IPv4 vs IPv6, CIDR notation like 10.0.0.0/16, private vs public ranges. Cloud VPCs are built entirely from this.
-- **<a id="concept-1-3" class="concept-num" href="#concept-1-3">1.3</a> TCP vs UDP.** TCP gives reliable, ordered byte streams with retransmission and flow control. UDP sends independent datagrams with no guarantees. HTTP/1.1 and HTTP/2 use TCP; HTTP/3 uses UDP via QUIC.
-- **<a id="concept-1-4" class="concept-num" href="#concept-1-4">1.4</a> The three-way handshake.** SYN, SYN-ACK, ACK. It costs one round trip before any data moves, which is why connection reuse matters so much.
-- **<a id="concept-1-5" class="concept-num" href="#concept-1-5">1.5</a> Connection teardown and TIME\_WAIT.** FIN and ACK in both directions, or RST for an abrupt close. The side that closes first sits in TIME\_WAIT. Busy proxies can run out of ports because of it.
-- **<a id="concept-1-6" class="concept-num" href="#concept-1-6">1.6</a> Ports and the 4-tuple.** A connection is identified by source IP, source port, destination IP and destination port. Ephemeral ports (the client side) are a finite pool, roughly 28,000 by default on Linux.
-- **<a id="concept-1-7" class="concept-num" href="#concept-1-7">1.7</a> Sockets.** The OS API for networking. Servers call `bind`, `listen` and `accept`; clients call `connect`. Every server you will ever touch is built on these calls.
-- **<a id="concept-1-8" class="concept-num" href="#concept-1-8">1.8</a> The listen backlog.** Completed connections wait in a queue until the server accepts them. If it fills, new clients see timeouts or resets.
-- **<a id="concept-1-9" class="concept-num" href="#concept-1-9">1.9</a> Latency, RTT and bandwidth.** Round-trip time dominates web performance more than bandwidth. Learn to reason in round trips: DNS + TCP + TLS + request.
-- **<a id="concept-1-10" class="concept-num" href="#concept-1-10">1.10</a> DNS.** How a name becomes an IP: resolvers, root and TLD servers, authoritative servers. Know A, AAAA, CNAME, NS, TXT and CAA records, and how TTL controls caching.
-- **<a id="concept-1-11" class="concept-num" href="#concept-1-11">1.11</a> NAT and firewalls.** Your VM's private IP is translated to a public one. Security groups and firewalls filter by port and source. "Connection refused" and "connection timed out" mean very different things here.
+<span id="concept-1-1"></span>
 
-**In the sandbox**
+### <span class="concept-badge">1.1</span> The layer model
+
+Know which layer each thing lives at: IP (routing packets), TCP or UDP (transport), TLS (security), HTTP (application). Debugging means asking "which layer failed?"
+
+<span id="concept-1-2"></span>
+
+### <span class="concept-badge">1.2</span> IP addresses and subnets
+
+IPv4 vs IPv6, CIDR notation like 10.0.0.0/16, private vs public ranges. Cloud VPCs are built entirely from this.
+
+<span id="concept-1-3"></span>
+
+### <span class="concept-badge">1.3</span> TCP vs UDP
+
+TCP gives reliable, ordered byte streams with retransmission and flow control. UDP sends independent datagrams with no guarantees. HTTP/1.1 and HTTP/2 use TCP; HTTP/3 uses UDP via QUIC.
+
+<span id="concept-1-4"></span>
+
+### <span class="concept-badge">1.4</span> The three-way handshake
+
+SYN, SYN-ACK, ACK. It costs one round trip before any data moves, which is why connection reuse matters so much.
+
+<span id="concept-1-5"></span>
+
+### <span class="concept-badge">1.5</span> Connection teardown and TIME\_WAIT
+
+FIN and ACK in both directions, or RST for an abrupt close. The side that closes first sits in TIME\_WAIT. Busy proxies can run out of ports because of it.
+
+<span id="concept-1-6"></span>
+
+### <span class="concept-badge">1.6</span> Ports and the 4-tuple
+
+A connection is identified by source IP, source port, destination IP and destination port. Ephemeral ports (the client side) are a finite pool, roughly 28,000 by default on Linux.
+
+<span id="concept-1-7"></span>
+
+### <span class="concept-badge">1.7</span> Sockets
+
+The OS API for networking. Servers call `bind`, `listen` and `accept`; clients call `connect`. Every server you will ever touch is built on these calls.
+
+<span id="concept-1-8"></span>
+
+### <span class="concept-badge">1.8</span> The listen backlog
+
+Completed connections wait in a queue until the server accepts them. If it fills, new clients see timeouts or resets.
+
+<span id="concept-1-9"></span>
+
+### <span class="concept-badge">1.9</span> Latency, RTT and bandwidth
+
+Round-trip time dominates web performance more than bandwidth. Learn to reason in round trips: DNS + TCP + TLS + request.
+
+<span id="concept-1-10"></span>
+
+### <span class="concept-badge">1.10</span> DNS
+
+How a name becomes an IP: resolvers, root and TLD servers, authoritative servers. Know A, AAAA, CNAME, NS, TXT and CAA records, and how TTL controls caching.
+
+<span id="concept-1-11"></span>
+
+### <span class="concept-badge">1.11</span> NAT and firewalls
+
+Your VM's private IP is translated to a public one. Security groups and firewalls filter by port and source. "Connection refused" and "connection timed out" mean very different things here.
+
+## In the sandbox
 
 1. On one VM, run `nc -l 9000`. From another, run `nc <ip> 9000` and type. You just made a raw TCP connection.
 2. Run `sudo tcpdump -i any -nn port 9000` during that test. Find the SYN, SYN-ACK and ACK, then the FIN packets when you close.
@@ -61,4 +124,10 @@ A DNS zone is a list of records: a name, a type, a TTL and a value. These are th
 4. Use `dig +trace example.com` to walk the full DNS resolution chain. Then check `dig example.com A` twice and watch the TTL count down.
 5. Run `ss -tan` while connections open and close. Spot the ESTABLISHED and TIME\_WAIT states.
 
-**You've got it when** you can draw the packets for opening, using and closing a TCP connection, and explain why "refused" and "timed out" point to different causes.
+## You've got it when
+
+<Checkpoint title="">
+
+You can draw the packets for opening, using and closing a TCP connection, and explain why "refused" and "timed out" point to different causes.
+
+</Checkpoint>
