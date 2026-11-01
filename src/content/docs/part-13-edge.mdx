@@ -1,27 +1,78 @@
 ---
 title: "Part 13 — The edge: CDNs, cloud load balancers and multiple zones"
+tableOfContents:
+  maxHeadingLevel: 3
 ---
 import RequestPath from '../../components/diagrams/RequestPath';
+import Checkpoint from '../../components/content/Checkpoint.astro';
 
 In real companies nginx is rarely alone. It sits in a chain of proxies, and part of expertise is knowing which layer should own each job. Plan one week.
+
+## Request path
 
 <RequestPath client:visible />
 
 Every hop is a separate connection with its own timeouts, so a failure anywhere surfaces to the client as a 5xx from the hop above it.
 
-**Concepts**
+## Concepts
 
-- **<a id="concept-13-1" class="concept-num" href="#concept-13-1">13.1</a> The full request path.** Client → DNS → CDN (CloudFront, Cloudflare) → cloud load balancer → nginx → app server → app → database. Each hop can terminate TLS, cache, rate limit and log.
-- **<a id="concept-13-2" class="concept-num" href="#concept-13-2">13.2</a> Who does what.** CDNs cache globally and absorb DDoS. Cloud load balancers provide high availability and health checks across zones. nginx handles routing, fine-grained caching, rate limits and per-app logic.
-- **<a id="concept-13-3" class="concept-num" href="#concept-13-3">13.3</a> CDN fundamentals.** The edge caches by URL and `Cache-Control` (`s-maxage` targets shared caches). Learn cache keys, purging, origin errors and what the CDN's cache-status header tells you. Static assets should almost never reach nginx.
-- **<a id="concept-13-4" class="concept-num" href="#concept-13-4">13.4</a> Cloud load balancers.** AWS ALB (layer 7) vs NLB (layer 4), GCP's HTTP(S) and TCP/UDP load balancers. Know which ones terminate TLS, which ones preserve the client IP, and what each health check really tests.
-- **<a id="concept-13-5" class="concept-num" href="#concept-13-5">13.5</a> The real client IP across hops.** Every proxy appends to `X-Forwarded-For`, and anyone can forge its first entries. Trust only your own hops: `set_real_ip_from` with your load balancer's CIDR, plus `real_ip_recursive on`. Behind a layer-4 NLB, use proxy protocol (`listen 443 ssl proxy_protocol`).
-- **<a id="concept-13-6" class="concept-num" href="#concept-13-6">13.6</a> Managed certificates.** AWS ACM and Google-managed certificates terminate TLS at the cloud load balancer and renew themselves. Then decide whether to re-encrypt to nginx ([5.14](/part-5-tls/#concept-5-14)).
-- **<a id="concept-13-7" class="concept-num" href="#concept-13-7">13.7</a> Multiple availability zones.** Spread nginx and backends across zones so one zone failure doesn't take you down. Understand cross-zone load balancing and its cost.
-- **<a id="concept-13-8" class="concept-num" href="#concept-13-8">13.8</a> Health checks at every layer.** The load balancer probes nginx; nginx passively watches the app. A shallow `/healthz` says the process is up; a deep one also checks the database. A deep check that fails during a database blip can take every node out at once.
-- **<a id="concept-13-9" class="concept-num" href="#concept-13-9">13.9</a> The timeout chain.** Request timeouts should get shorter as you move inward, so the hop closest to the problem fails first and logs why. Idle keep-alive timeouts do the opposite: each backend's must be longer than the hop in front of it, or the load balancer reuses a connection the backend just closed and returns a sudden 502.
+<span id="concept-13-1"></span>
 
-**In the sandbox — the capstone** (one or two 6-hour windows, fully scripted)
+### <span class="concept-badge">13.1</span> The full request path
+
+Client → DNS → CDN (CloudFront, Cloudflare) → cloud load balancer → nginx → app server → app → database. Each hop can terminate TLS, cache, rate limit and log.
+
+<span id="concept-13-2"></span>
+
+### <span class="concept-badge">13.2</span> Who does what
+
+CDNs cache globally and absorb DDoS. Cloud load balancers provide high availability and health checks across zones. nginx handles routing, fine-grained caching, rate limits and per-app logic.
+
+<span id="concept-13-3"></span>
+
+### <span class="concept-badge">13.3</span> CDN fundamentals
+
+The edge caches by URL and `Cache-Control` (`s-maxage` targets shared caches). Learn cache keys, purging, origin errors and what the CDN's cache-status header tells you. Static assets should almost never reach nginx.
+
+<span id="concept-13-4"></span>
+
+### <span class="concept-badge">13.4</span> Cloud load balancers
+
+AWS ALB (layer 7) vs NLB (layer 4), GCP's HTTP(S) and TCP/UDP load balancers. Know which ones terminate TLS, which ones preserve the client IP, and what each health check really tests.
+
+<span id="concept-13-5"></span>
+
+### <span class="concept-badge">13.5</span> The real client IP across hops
+
+Every proxy appends to `X-Forwarded-For`, and anyone can forge its first entries. Trust only your own hops: `set_real_ip_from` with your load balancer's CIDR, plus `real_ip_recursive on`. Behind a layer-4 NLB, use proxy protocol (`listen 443 ssl proxy_protocol`).
+
+<span id="concept-13-6"></span>
+
+### <span class="concept-badge">13.6</span> Managed certificates
+
+AWS ACM and Google-managed certificates terminate TLS at the cloud load balancer and renew themselves. Then decide whether to re-encrypt to nginx ([5.14](/part-5-tls/#concept-5-14)).
+
+<span id="concept-13-7"></span>
+
+### <span class="concept-badge">13.7</span> Multiple availability zones
+
+Spread nginx and backends across zones so one zone failure doesn't take you down. Understand cross-zone load balancing and its cost.
+
+<span id="concept-13-8"></span>
+
+### <span class="concept-badge">13.8</span> Health checks at every layer
+
+The load balancer probes nginx; nginx passively watches the app. A shallow `/healthz` says the process is up; a deep one also checks the database. A deep check that fails during a database blip can take every node out at once.
+
+<span id="concept-13-9"></span>
+
+### <span class="concept-badge">13.9</span> The timeout chain
+
+Request timeouts should get shorter as you move inward, so the hop closest to the problem fails first and logs why. Idle keep-alive timeouts do the opposite: each backend's must be longer than the hop in front of it, or the load balancer reuses a connection the backend just closed and returns a sudden 502.
+
+## In the sandbox — the capstone
+
+(one or two 6-hour windows, fully scripted)
 
 1. Put CloudFront or Cloudflare in front of an nginx VM. Send `Cache-Control: public, max-age=3600` on `/static/`, request twice, and find the edge's cache-hit header. Then purge.
 2. Create an ALB with two nginx targets in two zones and a `/healthz` check. Stop nginx on one and time how long until the target is marked unhealthy.
@@ -29,4 +80,10 @@ Every hop is a separate connection with its own timeouts, so a failure anywhere 
 4. Put an NLB in front with proxy protocol enabled, and configure `listen ... proxy_protocol` in nginx. Confirm the client IP survives layer 4.
 5. Reproduce the idle-timeout 502: set nginx `keepalive_timeout 5s` behind the ALB's 60-second idle timeout, send sparse traffic, and catch the intermittent 502s. Then fix it.
 
-**You've got it when** you can draw your company's edge and say which hop owns TLS, caching, health checks and the client's real IP.
+## You've got it when
+
+<Checkpoint title="">
+
+You can draw your company's edge and say which hop owns TLS, caching, health checks and the client's real IP.
+
+</Checkpoint>
