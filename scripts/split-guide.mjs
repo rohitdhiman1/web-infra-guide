@@ -8,6 +8,11 @@
 //   - concept numbers (1.1, 1.2 …) get linkable anchors (#concept-1-1), and
 //     cross-references to them, like "(1.5)", become links
 //   - headings are shifted up one level (the section's ## becomes the page title)
+//   - layout only, in formatPage(), following docs/STYLE.md (the words stay the same):
+//     concepts become "### <badge> Title" sections split into short paragraphs,
+//     "Concepts", "In the sandbox" and "You've got it when" become sections,
+//     the self-check goes in a <Checkpoint> box, standalone bold labels become
+//     headings, and each diagram near the top gets a heading from its title
 //
 // Re-run with `npm run split-guide`. It overwrites src/content/docs/*.mdx.
 
@@ -235,15 +240,139 @@ function transformSection(s) {
   return { imports, body: out.join('\n').replace(/\n{3,}/g, '\n\n').trim() };
 }
 
+// ---------------------------------------------------------------- layout (docs/STYLE.md)
+/** Heading shown above each diagram (the diagram's own title). */
+const DIAGRAM_TITLES = {
+  LayerModel: 'The layer model',
+  TcpLifecycle: 'TCP connection lifecycle',
+  DnsResolution: 'DNS resolution',
+  ConcurrencySimulator: 'Concurrency simulator',
+  ChainOfTrust: 'Chain of trust',
+  Tls13Handshake: 'TLS 1.3 handshake',
+  TlsTermination: 'TLS termination modes',
+  HolBlocking: 'Head-of-line blocking',
+  LocationMatching: 'Location matching',
+  HostnameChecks: 'The hostname simulator',
+  ReverseProxyErrors: 'Reverse proxy errors',
+  LoadBalancing: 'Load balancing simulator',
+  ProxyCache: 'Proxy cache simulator',
+  RateLimiting: 'Rate limiting simulator',
+  GunicornBuffering: 'App server simulator',
+  TomcatConnector: 'Tomcat connector simulator',
+  DebuggingFlow: 'Debugging flow',
+  RequestPath: 'Request path',
+  LearningPath: 'The path at a glance',
+};
+
+const MAJOR = /^(Concepts|In the sandbox.*|You['’]ve got it when)$/;
+const capitalise = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** Split a long run of sentences into short paragraphs, without changing a word. */
+function paragraphs(text) {
+  const keep = [];
+  const hold = (m) => `\u0000${keep.push(m) - 1}\u0000`;
+  const t = text.replace(/`[^`]*`|\[[^\]]*\]\([^)]*\)|<[^>]+>|e\.g\./g, hold);
+  const sentences = t.split(/(?<=[.!?”])\s+(?=[A-Z“(*\u0000])/).filter((x) => x.trim());
+  const paras = [];
+  let cur = [];
+  for (const sentence of sentences) {
+    cur.push(sentence);
+    const joined = cur.join(' ');
+    const limit = paras.length ? 300 : 230;
+    if (joined.length >= limit || cur.length === 3 || (!paras.length && cur.length === 2)) {
+      paras.push(joined);
+      cur = [];
+    }
+  }
+  if (cur.length) {
+    const tail = cur.join(' ');
+    if (paras.length && tail.length < 90 && paras.at(-1).length < 260) paras[paras.length - 1] += ` ${tail}`;
+    else paras.push(tail);
+  }
+  return paras.map((p) => p.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[Number(i)]));
+}
+
+function formatPage(body) {
+  const lines = body.split('\n');
+  const out = [];
+  let inFence = false;
+  let seenH2 = false;
+  // What the latest ## heading is: a section of the guide itself, a diagram heading, or none yet.
+  // Bold labels become ### only inside a real guide section; otherwise they are sections (##).
+  let lastH2 = null;
+  let usesCheckpoint = false;
+  for (const line of lines) {
+    if (/^```/.test(line)) inFence = !inFence;
+    if (inFence || /^```/.test(line)) {
+      out.push(line);
+      continue;
+    }
+    if (/^## /.test(line)) {
+      seenH2 = true;
+      lastH2 = 'guide';
+    }
+
+    // Concepts: "- **<a …>5.1</a> Title.** body" → anchor + badge heading + short paragraphs.
+    const c = /^- \*\*<a id="(concept-[\d-]+)" class="concept-num" href="#concept-[\d-]+">([\d.]+)<\/a> (.+?)\*\* ?(.*)$/.exec(line);
+    if (c) {
+      const [, id, num, title, rest] = c;
+      out.push(`<span id="${id}"></span>`, '', `### <span class="concept-badge">${num}</span> ${title.replace(/\.$/, '')}`, '');
+      for (const p of paragraphs(rest)) out.push(p, '');
+      continue;
+    }
+
+    // Diagrams near the top of a page get a section heading from their title.
+    const d = /^<([A-Za-z0-9]+) client:visible \/>$/.exec(line);
+    if (d && DIAGRAM_TITLES[d[1]]) {
+      if (lastH2 === 'guide' || lastH2 === 'major') out.push(`### ${DIAGRAM_TITLES[d[1]]}`, '', line);
+      else {
+        out.push(`## ${DIAGRAM_TITLES[d[1]]}`, '', line);
+        lastH2 = 'diagram';
+      }
+      seenH2 = true;
+      continue;
+    }
+
+    // Bold labels.
+    const b = /^\*\*([^*]+?)\*\*(.*)$/.exec(line);
+    if (b) {
+      const label = b[1].trim().replace(/:$/, '');
+      const rest = b[2].trim();
+      if (/^You['’]ve got it when$/.test(label)) {
+        usesCheckpoint = true;
+        out.push("## You've got it when", '', '<Checkpoint title="">', '', capitalise(rest), '', '</Checkpoint>');
+        seenH2 = true;
+        lastH2 = 'major';
+        continue;
+      }
+      const level = MAJOR.test(label) || !(lastH2 === 'guide' || lastH2 === 'major') ? '##' : '###';
+      if (!rest || rest.startsWith('(') || (b[1].trim().endsWith(':') && MAJOR.test(label))) {
+        out.push(`${level} ${label}`);
+        if (rest) out.push('', rest.startsWith('(') ? rest : capitalise(rest));
+        if (level === '##') {
+          seenH2 = true;
+          // A label promoted to a section sits beside the next label, not above it.
+          lastH2 = MAJOR.test(label) ? 'major' : 'label';
+        }
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return { body: out.join('\n').replace(/\n{3,}/g, '\n\n'), usesCheckpoint };
+}
+
 // ---------------------------------------------------------------- write
 mkdirSync(OUT, { recursive: true });
 for (const f of readdirSync(OUT)) if (f.endsWith('.mdx') || f.endsWith('.md')) rmSync(join(OUT, f));
 
 const yaml = (s) => JSON.stringify(s);
 for (const s of pageSections) {
-  const { imports, body } = transformSection(s);
+  const { imports, body: raw } = transformSection(s);
+  const { body, usesCheckpoint } = formatPage(raw);
+  if (usesCheckpoint) imports.push("import Checkpoint from '../../components/content/Checkpoint.astro';");
   const fm = ['---', `title: ${yaml(s.heading)}`];
-  if (s.page.slug === 'index') fm.push('tableOfContents:', '  maxHeadingLevel: 2');
+  fm.push('tableOfContents:', '  maxHeadingLevel: 3');
   fm.push('---', '');
   const head = imports.length ? imports.join('\n') + '\n\n' : '';
   const lead = s.page.slug === 'index' && byline ? `<p class="guide-byline">${mdxSafe(byline)}</p>\n\n` : '';
